@@ -1,4 +1,4 @@
-# galonku_mobile_frontend
+# galonku_mobile
 
 A new Flutter project.
 
