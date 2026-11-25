@@ -46,8 +46,7 @@ class ProductListScreen extends StatefulWidget {
 
 class _ProductListScreenState extends State<ProductListScreen> {
   static const Color primaryBlue = Color(0xFF0756C9);
-  static const Color cyan = Color(0xFF35C9E8);
-  static const Color pageBackground = Color(0xFFF5F6FC);
+static const Color pageBackground = Color(0xFFF5F6FC);
 
   final TextEditingController searchController =
       TextEditingController();
