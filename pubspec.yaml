@@ -1,25 +1,41 @@
 name: galonku_mobile_frontend
+ laudy
 description: "A new Flutter project."
+
+description: "Aplikasi Mobile GalonKu"
+ main
 publish_to: 'none'
 
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.13.2
+  sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
+ laudy
   cupertino_icons: ^1.0.8
   http: ^1.6.0
+
+  cupertino_icons: ^1.0.6
+ main
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+ laudy
   flutter_lints: ^6.0.0
+
+  flutter_lints: ^3.0.0
+ main
 
 flutter:
   uses-material-design: true
 
   assets:
+ laudy
     - assets/
+
+    - assets/images/
+ main
