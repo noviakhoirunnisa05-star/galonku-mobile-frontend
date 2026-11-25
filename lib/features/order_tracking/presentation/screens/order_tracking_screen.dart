@@ -1,30 +1,166 @@
-
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 class OrderTrackingScreen extends StatefulWidget {
   const OrderTrackingScreen({super.key});
 
   @override
-  State<OrderTrackingScreen> createState() =>
-      _OrderTrackingScreenState();
+  State<OrderTrackingScreen> createState() => _OrderTrackingScreenState();
 }
 
 class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
-  static const Color blue = Color(0xFF0756C9);
-  static const Color dark = Color(0xFF172337);
-  static const Color background = Color(0xFFF8F9FE);
-  static const Color cyan = Color(0xFF42D4EF);
+  static const Color primaryBlue = Color(0xFF0756C9);
+  static const Color cyanAccent = Color(0xFF3BD1F5);
+  static const Color pageBackground = Color(0xFFF5F6FC);
+  static const Color darkText = Color(0xFF172337);
+  static const Color secondaryText = Color(0xFF596273);
 
-  // ASSET GAMBAR
-  static const String aquaImage = 'assets/images/aqua_19l.png';
-  static const String profileImage = 'assets/images/profile.png';
+  static const String baseUrl = 'http://localhost:5001/api';
 
-  int selectedMenu = 0;
-  double zoom = 1.0;
+  static const double _depotLat = -6.2350;
+  static const double _depotLng = 106.7985;
+  static const double _destLat = -6.2295;
+  static const double _destLng = 106.8045;
 
-  void showMessage(String message) {
-    if (!mounted) return;
+  Timer? _liveTrackingTimer;
+  double _mapZoomScale = 1.0;
+  double _courierProgress = 0.45;
 
+  String _orderId = 'GK-8821';
+  String _productSummary = '2× Aqua Galon Isi Ulang 19L';
+  String _totalPriceText = 'Rp 42.000';
+  String _paymentMethod = 'QRIS';
+  String _recipientAddress = 'Kost Sakura, Kamar 204 (Lantai 2)';
+  String _recipientStreet = 'Jl. Melati No. 12, Senayan, Jakarta Selatan';
+  String _deliveryInstruction = 'Tukar Galon Kosong Siap di Kamar';
+
+  int _currentStatusStep = 2;
+  int _selectedBottomIndex = 2;
+  bool _isInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _startLiveTracking();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_isInitialized) return;
+    _isInitialized = true;
+
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map<String, dynamic>) {
+      setState(() {
+        if (args['orderId'] != null) _orderId = args['orderId'].toString();
+        if (args['productName'] != null) {
+          _productSummary = args['productName'].toString();
+        }
+        if (args['totalPrice'] != null) {
+          final rawPrice = args['totalPrice'];
+          _totalPriceText =
+              rawPrice is int ? _formatPrice(rawPrice) : rawPrice.toString();
+        }
+        if (args['paymentMethod'] != null) {
+          _paymentMethod = args['paymentMethod'].toString();
+        }
+        if (args['address'] != null) {
+          _recipientAddress = args['address'].toString();
+        }
+      });
+    }
+    _fetchTrackingFromBackend();
+  }
+
+  double get _totalRouteDistanceKm {
+    const double earthRadius = 6371.0;
+    final double dLat = (_destLat - _depotLat) * (math.pi / 180.0);
+    final double dLng = (_destLng - _depotLng) * (math.pi / 180.0);
+    final double a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_depotLat * (math.pi / 180.0)) *
+            math.cos(_destLat * (math.pi / 180.0)) *
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return double.parse((earthRadius * c * 1.35).toStringAsFixed(2));
+  }
+
+  double get _remainingDistanceKm {
+    final rem = _totalRouteDistanceKm * (1.0 - _courierProgress);
+    return double.parse(rem.clamp(0.0, _totalRouteDistanceKm).toStringAsFixed(2));
+  }
+
+  int get _calculatedEtaMinutes {
+    if (_courierProgress >= 1.0) return 0;
+    final minutes = (_remainingDistanceKm / 0.12).ceil();
+    return minutes.clamp(1, 25);
+  }
+
+  void _startLiveTracking() {
+    _liveTrackingTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      _fetchTrackingFromBackend();
+    });
+  }
+
+  Future<void> _fetchTrackingFromBackend() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/orders/$_orderId/tracking'))
+          .timeout(const Duration(seconds: 3));
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        final data = decoded is Map<String, dynamic>
+            ? (decoded['data'] ?? decoded)
+            : null;
+
+        if (data is Map<String, dynamic>) {
+          setState(() {
+            if (data['progress'] != null) {
+              _courierProgress =
+                  (double.tryParse(data['progress'].toString()) ??
+                          _courierProgress)
+                      .clamp(0.0, 1.0);
+            }
+            if (data['statusStep'] != null) {
+              _currentStatusStep =
+                  int.tryParse(data['statusStep'].toString()) ??
+                      _currentStatusStep;
+            }
+          });
+          return;
+        }
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        if (_courierProgress < 1.0) {
+          _courierProgress = (_courierProgress + 0.11).clamp(0.0, 1.0);
+          if (_courierProgress >= 1.0) {
+            _currentStatusStep = 3;
+          }
+        }
+      });
+    }
+  }
+
+  String _formatPrice(int price) {
+    final value = price.toString();
+    final buffer = StringBuffer();
+    for (int i = 0; i < value.length; i++) {
+      buffer.write(value[i]);
+      final remaining = value.length - i - 1;
+      if (remaining > 0 && remaining % 3 == 0) buffer.write('.');
+    }
+    return 'Rp $buffer';
+  }
+
+  void _showSnack(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -34,66 +170,137 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     );
   }
 
-  // WIDGET GAMBAR
-  Widget assetImage(
-    String path, {
-    BoxFit fit = BoxFit.cover,
-  }) {
-    return Image.asset(
-      path,
-      fit: fit,
-      errorBuilder: (context, error, stackTrace) {
-        debugPrint('GAGAL MEMUAT GAMBAR: $path');
-        debugPrint('ERROR: $error');
-
-        return Container(
-          color: const Color(0xFFF0F2F7),
-          alignment: Alignment.center,
-          child: const Icon(
-            Icons.broken_image_outlined,
-            color: Colors.redAccent,
-            size: 25,
+  void _showCallCourierDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.phone_in_talk, color: primaryBlue),
+            SizedBox(width: 8),
+            Text(
+              'Hubungi Kurir',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Menghubungkan panggilan suara ke Pak Budi Santoso (0812-8842-9910)...',
+          style: TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Tutup'),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
-  // HEADER
-  Widget buildHeader() {
+  void _showEditInstructionDialog() {
+    final controller = TextEditingController(text: _deliveryInstruction);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Ubah Instruksi Antar',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+        ),
+        content: TextField(
+          controller: controller,
+          maxLines: 2,
+          decoration: const InputDecoration(
+            hintText: 'Contoh: Titip di pos satpam / naik lantai 2...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final updated = controller.text.trim();
+              if (updated.isNotEmpty) {
+                setState(() => _deliveryInstruction = updated);
+                try {
+                  await http.patch(
+                    Uri.parse('$baseUrl/orders/$_orderId/instruction'),
+                    headers: {'Content-Type': 'application/json'},
+                    body: jsonEncode({'instruction': updated}),
+                  );
+                } catch (_) {}
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+              _showSnack('Instruksi pengantaran diperbarui.');
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: primaryBlue,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopAppBar() {
     return Container(
-      height: 43,
       color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 15),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
       child: Row(
         children: [
-          const Icon(
-            Icons.water_drop,
-            color: blue,
-            size: 19,
+          ClipOval(
+            child: Image.asset(
+              'assets/images/kurir_galon.png',
+              width: 30,
+              height: 30,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => const CircleAvatar(
+                radius: 15,
+                backgroundColor: Color(0xFFE7EEFF),
+                child: Icon(Icons.water_drop, color: primaryBlue, size: 18),
+              ),
+            ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
           const Text(
             'GalonKu',
             style: TextStyle(
-              color: blue,
-              fontSize: 12,
+              color: primaryBlue,
               fontWeight: FontWeight.bold,
+              fontSize: 17,
             ),
           ),
           const Spacer(),
           const Text(
             'Rosi',
-            style: TextStyle(fontSize: 9, color: dark),
+            style: TextStyle(
+              fontSize: 12,
+              color: darkText,
+              fontWeight: FontWeight.w500,
+            ),
           ),
-          const SizedBox(width: 6),
-          ClipOval(
-            child: SizedBox(
-              width: 25,
-              height: 25,
-              child: assetImage(
-                profileImage,
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => Navigator.pushNamed(context, '/profile'),
+            child: ClipOval(
+              child: Image.asset(
+                'assets/images/profile.png',
+                width: 34,
+                height: 34,
                 fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  width: 34,
+                  height: 34,
+                  color: const Color(0xFFE7EEFF),
+                  child: const Icon(Icons.person, color: primaryBlue, size: 19),
+                ),
               ),
             ),
           ),
@@ -102,11 +309,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     );
   }
 
-  // JUDUL TRACKING
-  Widget buildTitle() {
-    return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 9),
+  Widget _buildTrackingHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
       child: Row(
         children: [
           InkWell(
@@ -114,80 +319,80 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               if (Navigator.canPop(context)) {
                 Navigator.pop(context);
               } else {
-                showMessage('Tidak ada halaman sebelumnya.');
+                Navigator.pushReplacementNamed(context, '/dashboard');
               }
             },
-            borderRadius: BorderRadius.circular(30),
-            child: Container(
-              width: 28,
-              height: 28,
-              decoration: const BoxDecoration(
-                color: Color(0xFFF1F3F9),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.arrow_back,
-                size: 16,
-                color: dark,
-              ),
+            borderRadius: BorderRadius.circular(20),
+            child: const Padding(
+              padding: EdgeInsets.all(6),
+              child: Icon(Icons.arrow_back, size: 21, color: darkText),
             ),
           ),
           const SizedBox(width: 8),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    Text(
+                    const Text(
                       'Tracking Pesanan',
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 16,
                         fontWeight: FontWeight.bold,
-                        color: dark,
+                        color: darkText,
                       ),
                     ),
-                    SizedBox(width: 4),
-                    Icon(
-                      Icons.circle,
-                      color: Color(0xFF19B66E),
-                      size: 7,
-                    ),
-                    SizedBox(width: 3),
-                    Text(
-                      'Live',
-                      style: TextStyle(
-                        fontSize: 9,
-                        color: Color(0xFF19A86A),
-                        fontWeight: FontWeight.bold,
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD6F4FF),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        'Live',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: primaryBlue,
+                        ),
                       ),
                     ),
                   ],
                 ),
-                SizedBox(height: 3),
+                const SizedBox(height: 2),
                 Text(
-                  'Order #GK-8821 • Refill Cepat',
-                  style: TextStyle(
-                    fontSize: 8,
-                    color: Colors.grey,
-                  ),
+                  'Order #$_orderId • Sisa $_remainingDistanceKm km',
+                  style: const TextStyle(fontSize: 11, color: secondaryText),
                 ),
               ],
             ),
           ),
           InkWell(
-            onTap: showHelp,
+            onTap: () => Navigator.pushNamed(context, '/dashboard'),
+            borderRadius: BorderRadius.circular(20),
             child: Container(
-              width: 27,
-              height: 27,
-              decoration: const BoxDecoration(
-                color: Color(0xFFEAF3FF),
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Colors.white,
                 shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: const Icon(
-                Icons.headset_mic_outlined,
-                size: 15,
-                color: blue,
+                Icons.support_agent,
+                color: primaryBlue,
+                size: 20,
               ),
             ),
           ),
@@ -196,126 +401,226 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     );
   }
 
-  // PETA
-  Widget buildMap() {
-    return SizedBox(
-      height: 180,
-      width: double.infinity,
+  Widget _buildRealMapCard() {
+    final eta = _calculatedEtaMinutes;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 14),
+      height: 255,
+      decoration: BoxDecoration(
+        color: const Color(0xFFEBF1F8),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(18),
         child: Stack(
           children: [
             Positioned.fill(
-              child: CustomPaint(
-                painter: MapPainter(zoom: zoom),
-              ),
-            ),
-            Positioned(
-              top: 8,
-              left: 8,
-              child: mapBadge(
-                Icons.circle,
-                blue,
-                'Perkiraan Tiba: 12 Menit',
-              ),
-            ),
-            Positioned(
-              top: 8,
-              right: 8,
-              child: InkWell(
-                onTap: () {
-                  showMessage('Pengiriman diperkirakan tepat waktu.');
-                },
-                child: mapBadge(
-                  Icons.verified_user,
-                  const Color(0xFF168C59),
-                  'Tepat Waktu',
-                ),
-              ),
-            ),
+              child: Transform.scale(
+                scale: _mapZoomScale,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.network(
+                      'https://tile.openstreetmap.org/15/26103/16958.png',
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: const Color(0xFFEAF0F8),
+                      ),
+                    ),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final w = constraints.maxWidth;
+                        final h = constraints.maxHeight;
+                        final courierPos = _calculateCourierOffset(w, h);
 
-            // PENANDA KURIR, BUKAN FOTO
-            const Positioned(
-              left: 75,
-              top: 44,
-              child: Icon(
-                Icons.navigation,
-                color: blue,
-                size: 27,
-              ),
-            ),
-            const Positioned(
-              left: 173,
-              top: 38,
-              child: Icon(
-                Icons.location_on,
-                color: Color(0xFFC62828),
-                size: 25,
-              ),
-            ),
-            const Positioned(
-              left: 58,
-              top: 80,
-              child: Text(
-                'Taman Kota',
-                style: TextStyle(
-                  fontSize: 6,
-                  color: Color(0xFF168C59),
-                ),
-              ),
-            ),
-            const Positioned(
-              right: 35,
-              bottom: 54,
-              child: Text(
-                'Jl. Kenanga Baru',
-                style: TextStyle(
-                  fontSize: 6,
-                  color: Colors.grey,
-                ),
-              ),
-            ),
-
-            // ALAMAT DI PETA
-            Positioned(
-              left: 8,
-              bottom: 8,
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x15000000),
-                      blurRadius: 5,
+                        return Stack(
+                          children: [
+                            CustomPaint(
+                              size: Size(w, h),
+                              painter: _DeliveryRoutePainter(),
+                            ),
+                            Positioned(
+                              left: w * 0.22 - 10,
+                              top: h * 0.24 - 10,
+                              child: Container(
+                                width: 20,
+                                height: 20,
+                                decoration: BoxDecoration(
+                                  color: primaryBlue,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 3,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              left: w * 0.67 - 17,
+                              top: h * 0.43 - 32,
+                              child: const Icon(
+                                Icons.location_on,
+                                color: Color(0xFFD92D20),
+                                size: 35,
+                              ),
+                            ),
+                            AnimatedPositioned(
+                              duration: const Duration(milliseconds: 800),
+                              curve: Curves.easeInOut,
+                              left: courierPos.dx - 20,
+                              top: courierPos.dy - 20,
+                              child: Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: primaryBlue.withValues(alpha: 0.22),
+                                  shape: BoxShape.circle,
+                                ),
+                                padding: const EdgeInsets.all(4),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: primaryBlue,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 2.5,
+                                    ),
+                                  ),
+                                  child: const Icon(
+                                    Icons.water_drop,
+                                    color: Colors.white,
+                                    size: 15,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ],
                 ),
-                child: const Row(
-                  children: [
-                    Icon(
-                      Icons.location_on,
-                      color: Color(0xFFC62828),
-                      size: 11,
+              ),
+            ),
+
+            Positioned(
+              top: 12,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 8,
                     ),
-                    SizedBox(width: 3),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.circle, size: 9, color: primaryBlue),
+                    const SizedBox(width: 6),
+                    Text(
+                      eta == 0
+                          ? 'Kurir Sudah Tiba (0 km)'
+                          : 'Tiba: $eta Menit ($_remainingDistanceKm km)',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: primaryBlue,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            Positioned(
+              top: 12,
+              right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE6F6EC),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.speed, size: 13, color: Color(0xFF07863D)),
+                    SizedBox(width: 4),
+                    Text(
+                      'Tepat Waktu',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF07863D),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            Positioned(
+              bottom: 12,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 11,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 8,
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.location_on_outlined,
+                      color: Color(0xFFD92D20),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 6),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Kost Sakura, Kamar 204',
-                          style: TextStyle(
-                            fontSize: 7,
+                          _recipientAddress.split('(').first.trim(),
+                          style: const TextStyle(
+                            fontSize: 11,
                             fontWeight: FontWeight.bold,
-                            color: dark,
+                            color: darkText,
                           ),
                         ),
                         Text(
-                          'Jl. Melati No. 12, Sumbersari',
-                          style: TextStyle(
-                            fontSize: 6,
-                            color: Colors.grey,
+                          'Jarak total $_totalRouteDistanceKm km',
+                          style: const TextStyle(
+                            fontSize: 9,
+                            color: secondaryText,
                           ),
                         ),
                       ],
@@ -325,26 +630,43 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               ),
             ),
 
-            // TOMBOL ZOOM
             Positioned(
-              right: 7,
-              bottom: 8,
+              bottom: 12,
+              right: 12,
               child: Column(
                 children: [
-                  mapControl(Icons.add, () {
-                    setState(() {
-                      zoom = (zoom + 0.15).clamp(0.8, 1.6).toDouble();
-                    });
-                  }),
-                  mapControl(Icons.remove, () {
-                    setState(() {
-                      zoom = (zoom - 0.15).clamp(0.8, 1.6).toDouble();
-                    });
-                  }),
-                  const SizedBox(height: 4),
-                  mapControl(Icons.my_location, () {
-                    setState(() => zoom = 1.0);
-                  }),
+                  _buildMapControlButton(
+                    icon: Icons.add,
+                    onTap: () {
+                      setState(() {
+                        _mapZoomScale = (_mapZoomScale + 0.15).clamp(1.0, 1.75);
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 5),
+                  _buildMapControlButton(
+                    icon: Icons.remove,
+                    onTap: () {
+                      setState(() {
+                        _mapZoomScale = (_mapZoomScale - 0.15).clamp(1.0, 1.75);
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 5),
+                  _buildMapControlButton(
+                    icon: Icons.my_location,
+                    iconColor: primaryBlue,
+                    onTap: () {
+                      setState(() {
+                        _mapZoomScale = 1.0;
+                        if (_courierProgress >= 1.0) {
+                          _courierProgress = 0.25;
+                          _currentStatusStep = 2;
+                        }
+                      });
+                      _fetchTrackingFromBackend();
+                    },
+                  ),
                 ],
               ),
             ),
@@ -354,144 +676,144 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     );
   }
 
-  Widget mapBadge(
-    IconData icon,
-    Color color,
-    String label,
-  ) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 7,
-        vertical: 5,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x16000000),
-            blurRadius: 5,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 9),
-          const SizedBox(width: 3),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 7,
-              fontWeight: FontWeight.w600,
-              color: dark,
+  Offset _calculateCourierOffset(double w, double h) {
+    final p0 = Offset(w * 0.22, h * 0.24);
+    final p1 = Offset(w * 0.36, h * 0.34);
+    final p2 = Offset(w * 0.36, h * 0.61);
+    final p3 = Offset(w * 0.67, h * 0.61);
+    final p4 = Offset(w * 0.67, h * 0.43);
+
+    if (_courierProgress <= 0.25) {
+      return Offset.lerp(p0, p1, _courierProgress / 0.25)!;
+    } else if (_courierProgress <= 0.50) {
+      return Offset.lerp(p1, p2, (_courierProgress - 0.25) / 0.25)!;
+    } else if (_courierProgress <= 0.80) {
+      return Offset.lerp(p2, p3, (_courierProgress - 0.50) / 0.30)!;
+    } else {
+      return Offset.lerp(p3, p4, (_courierProgress - 0.80) / 0.20)!;
+    }
+  }
+
+  Widget _buildMapControlButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    Color iconColor = darkText,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        width: 30,
+        height: 30,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.10),
+              blurRadius: 6,
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget mapControl(IconData icon, VoidCallback action) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(5),
-      child: InkWell(
-        onTap: action,
-        borderRadius: BorderRadius.circular(5),
-        child: SizedBox(
-          width: 24,
-          height: 23,
-          child: Icon(icon, size: 15, color: dark),
+          ],
         ),
+        child: Icon(icon, size: 16, color: iconColor),
       ),
     );
   }
 
-  // KARTU KURIR
-  Widget buildDriverCard() {
+  Widget _buildCourierCard() {
     return Container(
-      padding: const EdgeInsets.all(9),
+      margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(
         children: [
           Row(
             children: [
-              // FOTO PAK BUDI DARI PROFILE.PNG
-              ClipOval(
-                child: SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: assetImage(
-                    profileImage,
-                    fit: BoxFit.cover,
+              Stack(
+                children: [
+                  ClipOval(
+                    child: Image.asset(
+                      'assets/images/kurir_galon.png',
+                      width: 48,
+                      height: 48,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const CircleAvatar(
+                        radius: 24,
+                        backgroundColor: Color(0xFFE7EEFF),
+                        child: Icon(Icons.person, color: primaryBlue),
+                      ),
+                    ),
                   ),
-                ),
+                  Positioned(
+                    right: 1,
+                    bottom: 1,
+                    child: Container(
+                      width: 11,
+                      height: 11,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF07863D),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 12),
               const Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
-                        Flexible(
-                          child: Text(
-                            'Pak Budi Santoso',
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: dark,
-                            ),
+                        Text(
+                          'Pak Budi Santoso',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: darkText,
                           ),
                         ),
-                        SizedBox(width: 4),
-                        Icon(
-                          Icons.verified,
-                          color: blue,
-                          size: 11,
-                        ),
+                        SizedBox(width: 5),
+                        Icon(Icons.verified, size: 15, color: primaryBlue),
                       ],
                     ),
                     SizedBox(height: 3),
                     Row(
                       children: [
-                        Icon(
-                          Icons.star,
-                          size: 10,
-                          color: Color(0xFFFFB52E),
+                        Icon(Icons.star, size: 14, color: Color(0xFFF59E0B)),
+                        SizedBox(width: 3),
+                        Text(
+                          '4.9',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: darkText,
+                          ),
                         ),
                         Text(
-                          ' 4.9 • 1.4k+ antar galon',
-                          style: TextStyle(
-                            fontSize: 7,
-                            color: dark,
-                          ),
+                          '  •  1.4k+ antar galon',
+                          style: TextStyle(fontSize: 11, color: secondaryText),
                         ),
                       ],
                     ),
                     SizedBox(height: 3),
                     Row(
                       children: [
-                        Icon(
-                          Icons.delivery_dining,
-                          size: 10,
-                          color: blue,
-                        ),
-                        SizedBox(width: 3),
-                        Flexible(
-                          child: Text(
-                            'Honda Beat Biru • B 4821 KOP',
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 7,
-                              color: Colors.grey,
-                            ),
-                          ),
+                        Icon(Icons.two_wheeler, size: 14, color: primaryBlue),
+                        SizedBox(width: 5),
+                        Text(
+                          'Honda Beat Biru • B 4821 KOP',
+                          style: TextStyle(fontSize: 11, color: secondaryText),
                         ),
                       ],
                     ),
@@ -500,426 +822,269 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 9),
+          const SizedBox(height: 14),
           Row(
             children: [
               Expanded(
-                child: driverButton(
-                  Icons.call,
-                  'Hubungi',
-                  blue,
-                  Colors.white,
-                  showCall,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: driverButton(
-                  Icons.chat_outlined,
-                  'Chat Kurir',
-                  cyan,
-                  dark,
-                  showChat,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget driverButton(
-    IconData icon,
-    String title,
-    Color color,
-    Color textColor,
-    VoidCallback action,
-  ) {
-    return SizedBox(
-      height: 32,
-      child: ElevatedButton.icon(
-        onPressed: action,
-        icon: Icon(icon, size: 11),
-        label: Text(
-          title,
-          style: const TextStyle(
-            fontSize: 9,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: color,
-          foregroundColor: textColor,
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // STATUS PENGIRIMAN
-  Widget buildStatusCard() {
-    final data = [
-      {
-        'title': 'Pesanan Diterima',
-        'desc': 'Pembayaran QRIS terverifikasi otomatis',
-        'time': '10:15 WIB',
-      },
-      {
-        'title': 'Galon Disegel Higienis',
-        'desc': 'Pembersihan dan tutup galon segel ganda',
-        'time': '10:20 WIB',
-      },
-      {
-        'title': 'Kurir Dalam Perjalanan',
-        'desc': 'Pak Budi membawa 2 galon menuju Kost Anda',
-        'time': '10:32 WIB',
-      },
-      {
-        'title': 'Sampai di Lokasi',
-        'desc': 'Harap siapkan 2 galon kosong untuk ditukar',
-        'time': 'Est. 10:45 WIB',
-      },
-    ];
-
-    const icons = [
-      Icons.check,
-      Icons.verified_user_outlined,
-      Icons.delivery_dining,
-      Icons.location_on_outlined,
-    ];
-
-    return Container(
-      padding: const EdgeInsets.all(9),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(11),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const Text(
-                'Status Pengiriman',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: dark,
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 6,
-                  vertical: 3,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEAF3FF),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Text(
-                  'Refill Express',
-                  style: TextStyle(
-                    color: blue,
-                    fontSize: 7,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 9),
-          ...List.generate(data.length, (index) {
-            final completed = index < 2;
-            final active = index == 2;
-
-            return InkWell(
-              onTap: () => showStatusDetail(
-                data[index]['title']!,
-                data[index]['desc']!,
-                data[index]['time']!,
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 22,
-                    child: Column(
-                      children: [
-                        Container(
-                          width: 17,
-                          height: 17,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: completed
-                                ? const Color(0xFF087B46)
-                                : active
-                                    ? blue
-                                    : const Color(0xFFE9EBF5),
-                          ),
-                          child: Icon(
-                            icons[index],
-                            color: completed || active
-                                ? Colors.white
-                                : Colors.grey,
-                            size: 10,
-                          ),
-                        ),
-                        if (index < 3)
-                          Container(
-                            width: 2,
-                            height: 30,
-                            color: completed
-                                ? const Color(0xFF9CD7B9)
-                                : const Color(0xFFDDE0EC),
-                          ),
-                      ],
+                child: SizedBox(
+                  height: 40,
+                  child: ElevatedButton.icon(
+                    onPressed: _showCallCourierDialog,
+                    icon: const Icon(Icons.phone_outlined, size: 17),
+                    label: const Text(
+                      'Hubungi',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 9),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  data[index]['title']!,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.bold,
-                                    color: completed || active
-                                        ? dark
-                                        : Colors.grey,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 3),
-                              Text(
-                                data[index]['time']!,
-                                style: const TextStyle(
-                                  fontSize: 7,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            data[index]['desc']!,
-                            style: const TextStyle(
-                              fontSize: 7,
-                              color: Color(0xFF818897),
-                            ),
-                          ),
-                        ],
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primaryBlue,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(11),
                       ),
                     ),
                   ),
-                ],
+                ),
               ),
-            );
-          }),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SizedBox(
+                  height: 40,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pushNamed(
+                        context,
+                        '/dashboard',
+                        arguments: {
+                          'openChatbot': true,
+                          'courierName': 'Pak Budi Santoso',
+                          'orderId': _orderId,
+                        },
+                      );
+                    },
+                    icon: const Icon(Icons.chat_bubble_outline, size: 17),
+                    label: const Text(
+                      'Chat Kurir',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: cyanAccent,
+                      foregroundColor: darkText,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  // RINCIAN PENGIRIMAN
-  Widget buildOrderCard() {
+  Widget _buildStatusTimelineCard() {
     return Container(
-      padding: const EdgeInsets.all(9),
+      margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+      padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(11),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'Rincian Pengiriman',
+                'Status Pengiriman',
                 style: TextStyle(
-                  fontSize: 10,
+                  fontSize: 14,
                   fontWeight: FontWeight.bold,
-                  color: dark,
+                  color: darkText,
                 ),
               ),
-              const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 7,
-                  vertical: 3,
+                  horizontal: 10,
+                  vertical: 4,
                 ),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFD9F5E7),
-                  borderRadius: BorderRadius.circular(10),
+                  color: const Color(0xFFE7EEFF),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Text(
-                  'Lunas',
+                  'Refill Express',
                   style: TextStyle(
-                    fontSize: 7,
-                    color: Color(0xFF087B46),
+                    fontSize: 10,
                     fontWeight: FontWeight.bold,
+                    color: primaryBlue,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 14),
+          _buildTimelineStep(
+            stepIndex: 0,
+            icon: Icons.check,
+            title: 'Pesanan Diterima',
+            subtitle: 'Pembayaran $_paymentMethod terverifikasi otomatis',
+            timeText: '10:15 WIB',
+          ),
+          _buildTimelineStep(
+            stepIndex: 1,
+            icon: Icons.verified_user_outlined,
+            title: 'Galon Disegel Higienis',
+            subtitle: 'Pembersihan tutup & uji segel selesai di Depot',
+            timeText: '10:20 WIB',
+          ),
+          _buildTimelineStep(
+            stepIndex: 2,
+            icon: Icons.two_wheeler,
+            title: 'Kurir Dalam Perjalanan',
+            subtitle:
+                'Pak Budi membawa galon ($_remainingDistanceKm km lagi)',
+            timeText: '10:32 WIB',
+            highlightTime: true,
+          ),
+          _buildTimelineStep(
+            stepIndex: 3,
+            icon: Icons.location_on_outlined,
+            title: 'Sampai di Lokasi',
+            subtitle: 'Harap siapkan galon kosong untuk ditukar',
+            timeText: 'Est. 10:45 WIB',
+            isLast: true,
+          ),
+        ],
+      ),
+    );
+  }
 
-          // FOTO AQUA ASLI
-          InkWell(
-            onTap: showProductDetail,
-            borderRadius: BorderRadius.circular(9),
-            child: Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0F2FC),
-                borderRadius: BorderRadius.circular(9),
+  Widget _buildTimelineStep({
+    required int stepIndex,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required String timeText,
+    bool highlightTime = false,
+    bool isLast = false,
+  }) {
+    final bool isCompleted = stepIndex < _currentStatusStep;
+    final bool isCurrent = stepIndex == _currentStatusStep;
+
+    Color circleBg;
+    Color iconColor;
+    if (isCompleted) {
+      circleBg = const Color(0xFF07863D);
+      iconColor = Colors.white;
+    } else if (isCurrent) {
+      circleBg = primaryBlue;
+      iconColor = Colors.white;
+    } else {
+      circleBg = const Color(0xFFF0F2F8);
+      iconColor = secondaryText;
+    }
+
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Column(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: circleBg,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 15, color: iconColor),
               ),
-              child: Row(
+              if (!isLast)
+                Expanded(
+                  child: Container(
+                    width: 2,
+                    color: isCompleted
+                        ? const Color(0xFF07863D)
+                        : const Color(0xFFE2E6F0),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: isLast ? 0 : 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(7),
-                    ),
-                    child: assetImage(
-                      aquaImage,
-                      fit: BoxFit.contain,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: isCurrent ? primaryBlue : darkText,
+                        ),
+                      ),
+                      if (highlightTime && isCurrent)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE7EEFF),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            timeText,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: primaryBlue,
+                            ),
+                          ),
+                        )
+                      else
+                        Text(
+                          timeText,
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: secondaryText,
+                          ),
+                        ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '2x Aqua Galon Isi Ulang 19L',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 8,
-                            fontWeight: FontWeight.bold,
-                            color: dark,
-                          ),
-                        ),
-                        SizedBox(height: 3),
-                        Text(
-                          'Tukar Galon Kosong Siap di',
-                          style: TextStyle(
-                            fontSize: 7,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        Text(
-                          'Kamar',
-                          style: TextStyle(
-                            fontSize: 7,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Text(
-                    'Rp 42.000',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: dark,
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      color: secondaryText,
                     ),
                   ),
                 ],
               ),
-            ),
-          ),
-          const SizedBox(height: 9),
-
-          InkWell(
-            onTap: () => showMessage('Alamat penerima pesanan.'),
-            child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  Icons.location_on_outlined,
-                  size: 12,
-                  color: Color(0xFF168C91),
-                ),
-                SizedBox(width: 5),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Alamat Penerima',
-                        style: TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.bold,
-                          color: dark,
-                        ),
-                      ),
-                      SizedBox(height: 3),
-                      Text(
-                        'Kost Sakura, Kamar 204 (Lantai 2)\n'
-                        'Jl. Melati No. 12, Sumbersari, Jakarta Selatan',
-                        style: TextStyle(
-                          fontSize: 7,
-                          height: 1.4,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Divider(
-            height: 14,
-            color: Color(0xFFECECF3),
-          ),
-          InkWell(
-            onTap: () => showMessage('Metode pembayaran: QRIS'),
-            child: const Row(
-              children: [
-                Icon(
-                  Icons.account_balance_wallet_outlined,
-                  size: 12,
-                  color: Color(0xFF168C91),
-                ),
-                SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    'Metode Pembayaran',
-                    style: TextStyle(
-                      fontSize: 8,
-                      color: dark,
-                    ),
-                  ),
-                ),
-                Text(
-                  '▦ QRIS',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
-                    color: dark,
-                  ),
-                ),
-              ],
             ),
           ),
         ],
@@ -927,81 +1092,248 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     );
   }
 
-  // BANTUAN
-  Widget buildHelp() {
-    return InkWell(
-      onTap: showHelp,
-      child: const Padding(
-        padding: EdgeInsets.symmetric(vertical: 11),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.help_outline,
-              color: blue,
-              size: 12,
+  Widget _buildOrderDetailsCard() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Rincian Pengiriman',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: darkText,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE6F6EC),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Text(
+                  'Lunas',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF07863D),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5F7FD),
+              borderRadius: BorderRadius.circular(12),
             ),
-            SizedBox(width: 5),
-            Text(
-              'Butuh bantuan atau ubah instruksi antar?',
-              style: TextStyle(
-                fontSize: 8,
-                color: blue,
-                fontWeight: FontWeight.w600,
+            child: Row(
+              children: [
+                Image.asset(
+                  'assets/images/aqua_19l.png',
+                  width: 44,
+                  height: 48,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Icon(
+                    Icons.water_drop,
+                    color: primaryBlue,
+                    size: 36,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _productSummary,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: darkText,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _deliveryInstruction,
+                        style: const TextStyle(
+                          fontSize: 10.5,
+                          color: secondaryText,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  _totalPriceText,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: darkText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                Icons.location_on_outlined,
+                size: 17,
+                color: primaryBlue,
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Alamat Penerima',
+                      style: TextStyle(fontSize: 10, color: secondaryText),
+                    ),
+                    Text(
+                      _recipientAddress,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: darkText,
+                      ),
+                    ),
+                    Text(
+                      _recipientStreet,
+                      style: const TextStyle(
+                        fontSize: 10.5,
+                        color: secondaryText,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const Divider(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(
+                    Icons.account_balance_wallet_outlined,
+                    size: 16,
+                    color: primaryBlue,
+                  ),
+                  SizedBox(width: 6),
+                  Text(
+                    'Metode Pembayaran',
+                    style: TextStyle(fontSize: 11, color: secondaryText),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  const Icon(Icons.circle, size: 7, color: cyanAccent),
+                  const SizedBox(width: 5),
+                  Text(
+                    _paymentMethod,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: darkText,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Center(
+            child: InkWell(
+              onTap: _showEditInstructionDialog,
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.help_outline, size: 15, color: primaryBlue),
+                  SizedBox(width: 5),
+                  Text(
+                    'Butuh bantuan atau ubah instruksi antar?',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: primaryBlue,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  // NAVIGASI BAWAH
-  Widget buildBottomNavigation() {
-    const items = [
-      {'icon': Icons.home_outlined, 'label': 'Beranda'},
-      {'icon': Icons.inventory_2_outlined, 'label': 'Produk'},
-      {'icon': Icons.receipt_long_outlined, 'label': 'Riwayat'},
-      {'icon': Icons.person_outline, 'label': 'Profil'},
+  Widget _buildBottomNavigation() {
+    const labels = ['Beranda', 'Produk', 'Riwayat', 'Profil'];
+    const icons = [
+      Icons.water_drop_outlined,
+      Icons.storefront_outlined,
+      Icons.receipt_long_outlined,
+      Icons.person_outline,
     ];
+    const routes = ['/dashboard', '/products', '/history', '/profile'];
 
     return Container(
-      height: 51,
+      height: 56,
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(
-          top: BorderSide(color: Color(0xFFE8EAF2)),
-        ),
+        border: Border(top: BorderSide(color: Color(0xFFE6E9F0))),
       ),
       child: Row(
-        children: List.generate(items.length, (index) {
-          final active = selectedMenu == index;
-
+        children: List.generate(4, (index) {
+          final active = _selectedBottomIndex == index;
           return Expanded(
             child: InkWell(
               onTap: () {
-                setState(() => selectedMenu = index);
-                showMessage(
-                  'Menu ${items[index]['label']} dipilih.',
-                );
+                setState(() => _selectedBottomIndex = index);
+                Navigator.pushReplacementNamed(context, routes[index]);
               },
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    items[index]['icon'] as IconData,
-                    size: 17,
-                    color: active ? blue : dark,
+                    icons[index],
+                    size: 20,
+                    color: active ? primaryBlue : Colors.black54,
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    items[index]['label'] as String,
+                    labels[index],
                     style: TextStyle(
-                      fontSize: 8,
-                      color: active ? blue : dark,
-                      fontWeight: active
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                      fontSize: 9.5,
+                      color: active ? primaryBlue : Colors.black54,
+                      fontWeight: active ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
                 ],
@@ -1013,190 +1345,35 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     );
   }
 
-  // HUBUNGI KURIR
-  void showCall() {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Hubungi Kurir'),
-        content: const Text(
-          'Hubungi Pak Budi Santoso untuk informasi pesanan #GK-8821.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Batal'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(dialogContext);
-              showMessage(
-                'Fitur telepon belum dihubungkan ke nomor kurir.',
-              );
-            },
-            child: const Text('Lanjutkan'),
-          ),
-        ],
-      ),
-    );
+  @override
+  void dispose() {
+    _liveTrackingTimer?.cancel();
+    super.dispose();
   }
 
-  // CHAT KURIR
-  void showChat() {
-    final controller = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text(
-          'Chat Pak Budi Santoso',
-          style: TextStyle(fontSize: 15),
-        ),
-        content: TextField(
-          controller: controller,
-          maxLines: 2,
-          decoration: const InputDecoration(
-            hintText: 'Tulis pesan untuk kurir...',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Batal'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final message = controller.text.trim();
-              Navigator.pop(dialogContext);
-
-              if (message.isNotEmpty) {
-                showMessage('Pesan: $message');
-              } else {
-                showMessage('Silakan tulis pesan terlebih dahulu.');
-              }
-            },
-            child: const Text('Kirim'),
-          ),
-        ],
-      ),
-    ).then((_) => controller.dispose());
-  }
-
-  // BANTUAN PESANAN
-  void showHelp() {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Bantuan Pesanan'),
-        content: const Text(
-          'Jika mengalami kendala pada pesanan #GK-8821, '
-          'kamu dapat menghubungi kurir GalonKu.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Tutup'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(dialogContext);
-              showCall();
-            },
-            child: const Text('Hubungi Kurir'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // DETAIL STATUS
-  void showStatusDetail(
-    String title,
-    String description,
-    String time,
-  ) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: Text('$description\n\nWaktu: $time'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Tutup'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // DETAIL PRODUK
-  void showProductDetail() {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Detail Produk'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: 120,
-              width: 120,
-              child: assetImage(
-                aquaImage,
-                fit: BoxFit.contain,
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Aqua Galon Isi Ulang 19 Liter\n'
-              'Jumlah: 2 galon\n'
-              'Total: Rp 42.000',
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Tutup'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // TAMPILAN UTAMA
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: background,
+      backgroundColor: pageBackground,
       body: SafeArea(
         child: Column(
           children: [
-            buildHeader(),
-            buildTitle(),
+            _buildTopAppBar(),
             Expanded(
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(10, 0, 10, 5),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    buildMap(),
-                    const SizedBox(height: 8),
-                    buildDriverCard(),
-                    const SizedBox(height: 8),
-                    buildStatusCard(),
-                    const SizedBox(height: 8),
-                    buildOrderCard(),
-                    buildHelp(),
+                    _buildTrackingHeader(),
+                    _buildRealMapCard(),
+                    _buildCourierCard(),
+                    _buildStatusTimelineCard(),
+                    _buildOrderDetailsCard(),
                   ],
                 ),
               ),
             ),
-            buildBottomNavigation(),
+            _buildBottomNavigation(),
           ],
         ),
       ),
@@ -1204,93 +1381,37 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   }
 }
 
-// GAMBAR PETA SIMULASI
-class MapPainter extends CustomPainter {
-  final double zoom;
-
-  MapPainter({required this.zoom});
-
+class _DeliveryRoutePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.drawColor(
-      const Color(0xFFEAF0F7),
-      BlendMode.src,
-    );
+    final w = size.width;
+    final h = size.height;
 
-    canvas.save();
-    canvas.translate(size.width / 2, size.height / 2);
-    canvas.scale(zoom);
-    canvas.translate(-size.width / 2, -size.height / 2);
+    final path = Path()
+      ..moveTo(w * 0.22, h * 0.24)
+      ..lineTo(w * 0.36, h * 0.34)
+      ..lineTo(w * 0.36, h * 0.61)
+      ..lineTo(w * 0.67, h * 0.61)
+      ..lineTo(w * 0.67, h * 0.43);
 
-    final park = Paint()
-      ..color = const Color(0xFFD9F0E3);
-
-    final road = Paint()
-      ..color = const Color(0xFFCFD9E3)
-      ..strokeWidth = 5
-      ..style = PaintingStyle.stroke;
-
-    final smallRoad = Paint()
-      ..color = const Color(0xFFDCE4EB)
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          size.width * 0.60,
-          size.height * 0.05,
-          size.width * 0.24,
-          size.height * 0.30,
-        ),
-        const Radius.circular(6),
-      ),
-      park,
-    );
-
-    canvas.drawPath(
-      Path()
-        ..moveTo(-10, size.height * 0.45)
-        ..lineTo(size.width + 10, size.height * 0.28),
-      road,
-    );
-
-    canvas.drawPath(
-      Path()
-        ..moveTo(-10, size.height * 0.78)
-        ..lineTo(size.width + 10, size.height * 0.60),
-      road,
-    );
-
-    for (final x in [0.15, 0.40, 0.73]) {
-      canvas.drawPath(
-        Path()
-          ..moveTo(size.width * x, -10)
-          ..lineTo(size.width * x, size.height + 10),
-        smallRoad,
-      );
-    }
+    final borderPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 8.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
 
     final routePaint = Paint()
-      ..color = const Color(0xFF0064D8)
-      ..strokeWidth = 3
+      ..color = const Color(0xFF0756C9)
+      ..strokeWidth = 5.0
+      ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
+      ..strokeJoin = StrokeJoin.round;
 
-    final route = Path()
-      ..moveTo(size.width * 0.14, size.height * 0.10)
-      ..lineTo(size.width * 0.29, size.height * 0.25)
-      ..lineTo(size.width * 0.29, size.height * 0.70)
-      ..lineTo(size.width * 0.72, size.height * 0.70)
-      ..lineTo(size.width * 0.72, size.height * 0.32);
-
-    canvas.drawPath(route, routePaint);
-    canvas.restore();
+    canvas.drawPath(path, borderPaint);
+    canvas.drawPath(path, routePaint);
   }
 
   @override
-  bool shouldRepaint(covariant MapPainter oldDelegate) {
-    return oldDelegate.zoom != zoom;
-  }
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

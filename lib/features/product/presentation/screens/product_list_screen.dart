@@ -1,10 +1,7 @@
-
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../widgets/product_card.dart';
-
-// ======================================================
-// MODEL PRODUK
-// ======================================================
 
 class _Product {
   final String id;
@@ -30,39 +27,70 @@ class _Product {
     required this.price,
     this.originalPrice,
   });
-}
 
-// ======================================================
-// PRODUCT LIST SCREEN
-// ======================================================
+  factory _Product.fromJson(Map<String, dynamic> json) {
+    return _Product(
+      id: (json['id'] ?? json['_id'] ?? '').toString(),
+      name: (json['name'] ?? json['nama_produk'] ?? 'Galon').toString(),
+      description: (json['description'] ?? json['deskripsi'] ?? '').toString(),
+      brand: (json['brand'] ?? json['merek'] ?? 'Aqua').toString(),
+      category: (json['category'] ?? json['kategori'] ?? 'Isi Ulang (Tukar)')
+          .toString(),
+      image: (json['image'] ??
+              json['gambar'] ??
+              'assets/images/aqua_19l.png')
+          .toString(),
+      rating: (json['rating'] ?? '4.9 (500+)').toString(),
+      unit: (json['unit'] ?? json['satuan'] ?? 'Galon Resmi').toString(),
+      price: int.tryParse((json['price'] ?? json['harga'] ?? 20000).toString()) ??
+          20000,
+      originalPrice: json['originalPrice'] != null || json['harga_asli'] != null
+          ? int.tryParse(
+              (json['originalPrice'] ?? json['harga_asli']).toString())
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toCartMap(int quantity) {
+    return {
+      'id': id,
+      'name': name,
+      'description': description,
+      'brand': brand,
+      'category': category,
+      'image': image,
+      'price': price,
+      'quantity': quantity,
+      'subtotal': price * quantity,
+    };
+  }
+}
 
 class ProductListScreen extends StatefulWidget {
   const ProductListScreen({super.key});
 
   @override
-  State<ProductListScreen> createState() =>
-      _ProductListScreenState();
+  State<ProductListScreen> createState() => _ProductListScreenState();
 }
 
 class _ProductListScreenState extends State<ProductListScreen> {
   static const Color primaryBlue = Color(0xFF0756C9);
-static const Color pageBackground = Color(0xFFF5F6FC);
+  static const Color pageBackground = Color(0xFFF5F6FC);
+  static const String baseUrl = 'http://localhost:5001/api';
 
-  final TextEditingController searchController =
-      TextEditingController();
+  final TextEditingController searchController = TextEditingController();
 
   String selectedBrand = 'Semua';
   String selectedCategory = 'Semua Galon';
+  String deliveryAddress = 'Kost Sakura, Kamar 204';
 
   int selectedBottomIndex = 1;
+  bool isLoadingProducts = false;
+  bool isSyncingCart = false;
 
   final Map<String, int> quantities = {};
 
-  // ======================================================
-  // DATA PRODUK
-  // ======================================================
-
-  final List<_Product> products = const [
+  final List<_Product> _defaultProducts = const [
     _Product(
       id: 'aqua',
       name: 'Aqua Galon Isi Ulang 19L',
@@ -75,7 +103,6 @@ static const Color pageBackground = Color(0xFFF5F6FC);
       price: 20000,
       originalPrice: 22000,
     ),
-
     _Product(
       id: 'le_minerale',
       name: 'Le Minerale 15L',
@@ -87,7 +114,6 @@ static const Color pageBackground = Color(0xFFF5F6FC);
       unit: 'Galon Baru Setiap Beli',
       price: 22000,
     ),
-
     _Product(
       id: 'cleo',
       name: 'Cleo Pure Water Galon 19L',
@@ -99,7 +125,6 @@ static const Color pageBackground = Color(0xFFF5F6FC);
       unit: 'Isi Ulang & Baru',
       price: 19000,
     ),
-
     _Product(
       id: 'vit',
       name: 'Vit 19L',
@@ -111,7 +136,6 @@ static const Color pageBackground = Color(0xFFF5F6FC);
       unit: 'Refill Galon Resmi',
       price: 16000,
     ),
-
     _Product(
       id: 'amidis',
       name: 'Amidis 19L',
@@ -125,86 +149,130 @@ static const Color pageBackground = Color(0xFFF5F6FC);
     ),
   ];
 
-  // ======================================================
-  // TOTAL JUMLAH PRODUK
-  // ======================================================
+  late List<_Product> products;
 
-  int get totalItems {
-    return quantities.values.fold(
-      0,
-      (total, quantity) => total + quantity,
+  @override
+  void initState() {
+    super.initState();
+    products = List.from(_defaultProducts);
+    _fetchProductsFromBackend();
+  }
+
+  Future<void> _fetchProductsFromBackend() async {
+    setState(() => isLoadingProducts = true);
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/products'))
+          .timeout(const Duration(seconds: 4));
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        final List<dynamic> listData =
+            decoded is List ? decoded : (decoded['data'] ?? []);
+
+        if (listData.isNotEmpty) {
+          setState(() {
+            products = listData
+                .map((item) => _Product.fromJson(item as Map<String, dynamic>))
+                .toList();
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Menggunakan katalog lokal: $e');
+    } finally {
+      if (mounted) {
+        setState(() => isLoadingProducts = false);
+      }
+    }
+  }
+
+  Future<void> _goToCartScreen() async {
+    if (totalItems == 0) {
+      showMessage('Silakan pilih minimal 1 galon terlebih dahulu.');
+      return;
+    }
+
+    final selectedCartItems = products
+        .where((product) => (quantities[product.id] ?? 0) > 0)
+        .map((product) => product.toCartMap(quantities[product.id]!))
+        .toList();
+
+    final cartPayload = {
+      'address': deliveryAddress,
+      'items': selectedCartItems,
+      'totalItems': totalItems,
+      'totalPrice': totalPrice,
+    };
+
+    setState(() => isSyncingCart = true);
+    try {
+      await http
+          .post(
+            Uri.parse('$baseUrl/cart'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(cartPayload),
+          )
+          .timeout(const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('Sync keranjang ke backend dilewati: $e');
+    } finally {
+      if (mounted) {
+        setState(() => isSyncingCart = false);
+      }
+    }
+
+    if (!mounted) return;
+    Navigator.pushNamed(
+      context,
+      '/cart',
+      arguments: cartPayload,
     );
   }
 
-  // ======================================================
-  // TOTAL HARGA KERANJANG
-  // ======================================================
+  int get totalItems {
+    return quantities.values.fold(0, (total, quantity) => total + quantity);
+  }
 
   int get totalPrice {
     int total = 0;
-
     for (final product in products) {
-      total +=
-          product.price * (quantities[product.id] ?? 0);
+      total += product.price * (quantities[product.id] ?? 0);
     }
-
     return total;
   }
-
-  // ======================================================
-  // FORMAT HARGA
-  // ======================================================
 
   String formatPrice(int price) {
     final value = price.toString();
     final buffer = StringBuffer();
-
     for (int i = 0; i < value.length; i++) {
       buffer.write(value[i]);
-
       final remaining = value.length - i - 1;
-
       if (remaining > 0 && remaining % 3 == 0) {
         buffer.write('.');
       }
     }
-
     return 'Rp $buffer';
   }
 
-  // ======================================================
-  // FILTER PRODUK
-  // ======================================================
-
   List<_Product> get filteredProducts {
-    final keyword =
-        searchController.text.toLowerCase().trim();
-
+    final keyword = searchController.text.toLowerCase().trim();
     return products.where((product) {
-      final brandMatch = selectedBrand == 'Semua' ||
-          product.brand == selectedBrand;
-
-      final categoryMatch =
-          selectedCategory == 'Semua Galon' ||
-              product.category == selectedCategory;
-
-      final searchMatch =
-          product.name.toLowerCase().contains(keyword) ||
-              product.brand.toLowerCase().contains(keyword);
-
+      final brandMatch =
+          selectedBrand == 'Semua' || product.brand == selectedBrand;
+      final categoryMatch = selectedCategory == 'Semua Galon' ||
+          product.category == selectedCategory;
+      final searchMatch = product.name.toLowerCase().contains(keyword) ||
+          product.brand.toLowerCase().contains(keyword);
       return brandMatch && categoryMatch && searchMatch;
     }).toList();
   }
-
-  // ======================================================
-  // UPDATE QUANTITY
-  // ======================================================
 
   void updateQuantity(String id, int change) {
     setState(() {
       final current = quantities[id] ?? 0;
       final next = current + change;
-
       if (next <= 0) {
         quantities.remove(id);
       } else {
@@ -213,9 +281,48 @@ static const Color pageBackground = Color(0xFFF5F6FC);
     });
   }
 
-  // ======================================================
-  // SNACKBAR
-  // ======================================================
+  void _editAddressDialog() {
+    final controller = TextEditingController(text: deliveryAddress);
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text(
+            'Ubah Alamat Pengantaran',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+          ),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              hintText: 'Masukkan alamat lengkap...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (controller.text.trim().isNotEmpty) {
+                  setState(() {
+                    deliveryAddress = controller.text.trim();
+                  });
+                }
+                Navigator.pop(dialogContext);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryBlue,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Simpan'),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   void showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -227,10 +334,6 @@ static const Color pageBackground = Color(0xFFF5F6FC);
     );
   }
 
-  // ======================================================
-  // HEADER GALONKU
-  // ======================================================
-
   Widget buildHeader() {
     return Container(
       width: double.infinity,
@@ -240,11 +343,7 @@ static const Color pageBackground = Color(0xFFF5F6FC);
         children: [
           Row(
             children: [
-              const Icon(
-                Icons.water_drop,
-                color: primaryBlue,
-                size: 23,
-              ),
+              const Icon(Icons.water_drop, color: primaryBlue, size: 23),
               const SizedBox(width: 6),
               const Text(
                 'GalonKu',
@@ -257,47 +356,33 @@ static const Color pageBackground = Color(0xFFF5F6FC);
               const Spacer(),
               const Text(
                 'Rosi',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Color(0xFF172337),
-                ),
+                style: TextStyle(fontSize: 11, color: Color(0xFF172337)),
               ),
               const SizedBox(width: 8),
-
-              // FOTO PROFIL ROSI
-              ClipOval(
-                child: Image.asset(
-                  'assets/images/profile.png',
-                  width: 36,
-                  height: 36,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    debugPrint(
-                      'Gagal memuat foto Rosi: $error',
-                    );
-
-                    return Container(
-                      width: 36,
-                      height: 36,
-                      color: const Color(0xFFE7EEFF),
-                      child: const Icon(
-                        Icons.person,
-                        color: primaryBlue,
-                      ),
-                    );
-                  },
+              GestureDetector(
+                onTap: () => Navigator.pushNamed(context, '/profile'),
+                child: ClipOval(
+                  child: Image.asset(
+                    'assets/images/profile.png',
+                    width: 36,
+                    height: 36,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        width: 36,
+                        height: 36,
+                        color: const Color(0xFFE7EEFF),
+                        child: const Icon(Icons.person, color: primaryBlue),
+                      );
+                    },
+                  ),
                 ),
               ),
             ],
           ),
-
           const SizedBox(height: 12),
-
-          // ALAMAT PENGIRIMAN
           InkWell(
-            onTap: () {
-              showMessage('Ubah alamat pengiriman.');
-            },
+            onTap: _editAddressDialog,
             child: Row(
               children: [
                 const Icon(
@@ -306,12 +391,12 @@ static const Color pageBackground = Color(0xFFF5F6FC);
                   size: 17,
                 ),
                 const SizedBox(width: 6),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Kirim ke: Kost Sakura, Kamar 204',
+                    'Kirim ke: $deliveryAddress',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 11,
                       color: Color(0xFF172337),
                     ),
@@ -333,10 +418,6 @@ static const Color pageBackground = Color(0xFFF5F6FC);
     );
   }
 
-  // ======================================================
-  // SEARCH BAR
-  // ======================================================
-
   Widget buildSearchBar() {
     return Container(
       color: Colors.white,
@@ -345,26 +426,19 @@ static const Color pageBackground = Color(0xFFF5F6FC);
         height: 43,
         padding: const EdgeInsets.symmetric(horizontal: 11),
         decoration: BoxDecoration(
-          border: Border.all(
-            color: const Color(0xFFE5E9F1),
-          ),
+          border: Border.all(color: const Color(0xFFE5E9F1)),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           children: [
-            const Icon(
-              Icons.search,
-              size: 20,
-              color: Colors.grey,
-            ),
+            const Icon(Icons.search, size: 20, color: Colors.grey),
             const SizedBox(width: 8),
             Expanded(
               child: TextField(
                 controller: searchController,
                 onChanged: (_) => setState(() {}),
                 decoration: const InputDecoration(
-                  hintText:
-                      'Cari Aqua, Le Minerale, Cleo, Club...',
+                  hintText: 'Cari Aqua, Le Minerale, Cleo, Club...',
                   hintStyle: TextStyle(fontSize: 11),
                   border: InputBorder.none,
                   isDense: true,
@@ -378,26 +452,18 @@ static const Color pageBackground = Color(0xFFF5F6FC);
                   searchController.clear();
                   setState(() {});
                 },
-                child: const Icon(
-                  Icons.close,
-                  size: 18,
-                ),
+                child: const Icon(Icons.close, size: 18),
               ),
             const SizedBox(width: 6),
-            const Icon(
-              Icons.tune,
-              size: 19,
-              color: Colors.grey,
+            InkWell(
+              onTap: _fetchProductsFromBackend,
+              child: const Icon(Icons.tune, size: 19, color: Colors.grey),
             ),
           ],
         ),
       ),
     );
   }
-
-  // ======================================================
-  // FILTER MEREK
-  // ======================================================
 
   Widget buildBrandFilter() {
     const brands = [
@@ -416,8 +482,7 @@ static const Color pageBackground = Color(0xFFF5F6FC);
         padding: const EdgeInsets.symmetric(horizontal: 12),
         scrollDirection: Axis.horizontal,
         itemCount: brands.length,
-        separatorBuilder: (_, __) =>
-            const SizedBox(width: 7),
+        separatorBuilder: (_, __) => const SizedBox(width: 7),
         itemBuilder: (context, index) {
           final brand = brands[index];
           final selected = selectedBrand == brand;
@@ -425,34 +490,25 @@ static const Color pageBackground = Color(0xFFF5F6FC);
           return Center(
             child: InkWell(
               borderRadius: BorderRadius.circular(22),
-              onTap: () {
-                setState(() {
-                  selectedBrand = brand;
-                });
-              },
+              onTap: () => setState(() => selectedBrand = brand),
               child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 14,
                   vertical: 9,
                 ),
                 decoration: BoxDecoration(
-                  color: selected
-                      ? primaryBlue
-                      : Colors.white,
+                  color: selected ? primaryBlue : Colors.white,
                   borderRadius: BorderRadius.circular(22),
                   border: Border.all(
-                    color: selected
-                        ? primaryBlue
-                        : const Color(0xFFE7EAF0),
+                    color:
+                        selected ? primaryBlue : const Color(0xFFE7EAF0),
                   ),
                 ),
                 child: Text(
                   brand,
                   style: TextStyle(
                     fontSize: 10,
-                    color: selected
-                        ? Colors.white
-                        : Colors.black87,
+                    color: selected ? Colors.white : Colors.black87,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -463,10 +519,6 @@ static const Color pageBackground = Color(0xFFF5F6FC);
       ),
     );
   }
-
-  // ======================================================
-  // FILTER KATEGORI
-  // ======================================================
 
   Widget buildCategoryFilter() {
     const categories = [
@@ -481,23 +533,16 @@ static const Color pageBackground = Color(0xFFF5F6FC);
       child: Row(
         children: categories.map((category) {
           final selected = selectedCategory == category;
-
           return Expanded(
             child: InkWell(
-              onTap: () {
-                setState(() {
-                  selectedCategory = category;
-                });
-              },
+              onTap: () => setState(() => selectedCategory = category),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   Expanded(
                     child: Center(
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 2,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
                         child: Text(
                           category,
                           textAlign: TextAlign.center,
@@ -517,9 +562,7 @@ static const Color pageBackground = Color(0xFFF5F6FC);
                   Container(
                     height: 2,
                     width: 55,
-                    color: selected
-                        ? primaryBlue
-                        : Colors.transparent,
+                    color: selected ? primaryBlue : Colors.transparent,
                   ),
                 ],
               ),
@@ -529,10 +572,6 @@ static const Color pageBackground = Color(0xFFF5F6FC);
       ),
     );
   }
-
-  // ======================================================
-  // BANNER HIGIENIS
-  // ======================================================
 
   Widget buildHygieneBanner() {
     return Container(
@@ -564,10 +603,7 @@ static const Color pageBackground = Color(0xFFF5F6FC);
               children: [
                 Text(
                   'Jaminan Higienis & Tersegel',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                 ),
                 SizedBox(height: 3),
                 Text(
@@ -582,26 +618,14 @@ static const Color pageBackground = Color(0xFFF5F6FC);
     );
   }
 
-  // ======================================================
-  // KARTU PRODUK
-  // MENGGUNAKAN PRODUCT CARD DARI WIDGETS
-  // ======================================================
-
   Widget buildProductCard(_Product product) {
     final quantity = quantities[product.id] ?? 0;
-
     return ProductCard(
       product: product,
       quantity: quantity,
-      onQuantityChanged: (change) {
-        updateQuantity(product.id, change);
-      },
+      onQuantityChanged: (change) => updateQuantity(product.id, change),
     );
   }
-
-  // ======================================================
-  // RINGKASAN KERANJANG
-  // ======================================================
 
   Widget buildCartBar() {
     return Container(
@@ -640,7 +664,7 @@ static const Color pageBackground = Color(0xFFF5F6FC);
           SizedBox(
             height: 38,
             child: ElevatedButton(
-              onPressed: showCart,
+              onPressed: isSyncingCart ? null : _goToCartScreen,
               style: ElevatedButton.styleFrom(
                 backgroundColor: primaryBlue,
                 foregroundColor: Colors.white,
@@ -651,9 +675,9 @@ static const Color pageBackground = Color(0xFFF5F6FC);
               ),
               child: Row(
                 children: [
-                  const Text(
-                    'Lihat Keranjang',
-                    style: TextStyle(fontSize: 10),
+                  Text(
+                    isSyncingCart ? 'Memuat...' : 'Lihat Keranjang',
+                    style: const TextStyle(fontSize: 10),
                   ),
                   const SizedBox(width: 7),
                   CircleAvatar(
@@ -677,226 +701,31 @@ static const Color pageBackground = Color(0xFFF5F6FC);
     );
   }
 
-  // ======================================================
-  // KERANJANG BELANJA
-  // ======================================================
-
-  void showCart() {
-    if (totalItems == 0) {
-      showMessage(
-        'Silakan pilih produk terlebih dahulu.',
-      );
-      return;
-    }
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(20),
-        ),
-      ),
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (context, modalSetState) {
-            final selectedProducts = products.where(
-              (product) =>
-                  (quantities[product.id] ?? 0) > 0,
-            ).toList();
-
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(18),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Keranjang Belanja',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-
-                      const SizedBox(height: 15),
-
-                      ...selectedProducts.map((product) {
-                        final quantity =
-                            quantities[product.id] ?? 0;
-
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Image.asset(
-                            product.image,
-                            width: 42,
-                            height: 50,
-                            fit: BoxFit.contain,
-                            errorBuilder:
-                                (context, error, stackTrace) {
-                              return const Icon(
-                                Icons.broken_image_outlined,
-                                color: Colors.red,
-                              );
-                            },
-                          ),
-                          title: Text(
-                            product.name,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          subtitle: Text(
-                            formatPrice(product.price),
-                            style: const TextStyle(
-                              color: primaryBlue,
-                              fontSize: 10,
-                            ),
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                onPressed: () {
-                                  updateQuantity(
-                                    product.id,
-                                    -1,
-                                  );
-                                  modalSetState(() {});
-                                },
-                                icon: const Icon(
-                                  Icons.remove_circle_outline,
-                                  size: 19,
-                                ),
-                              ),
-                              Text(
-                                '$quantity',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                ),
-                              ),
-                              IconButton(
-                                onPressed: () {
-                                  updateQuantity(
-                                    product.id,
-                                    1,
-                                  );
-                                  modalSetState(() {});
-                                },
-                                icon: const Icon(
-                                  Icons.add_circle_outline,
-                                  color: primaryBlue,
-                                  size: 19,
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }),
-
-                      const Divider(),
-
-                      Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Total Belanja',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            formatPrice(totalPrice),
-                            style: const TextStyle(
-                              color: primaryBlue,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 15),
-
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: totalItems == 0
-                              ? null
-                              : () {
-                                  Navigator.pop(sheetContext);
-                                  showMessage(
-                                    'Produk berhasil dipilih.',
-                                  );
-                                },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: primaryBlue,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.all(13),
-                          ),
-                          child: const Text('Lanjutkan'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  // ======================================================
-  // BOTTOM NAVIGATION
-  // ======================================================
-
   Widget buildBottomNavigation() {
-    const labels = [
-      'Beranda',
-      'Produk',
-      'Riwayat',
-      'Profil',
-    ];
-
+    const labels = ['Beranda', 'Produk', 'Riwayat', 'Profil'];
     const icons = [
       Icons.home_outlined,
       Icons.storefront_outlined,
       Icons.receipt_long_outlined,
       Icons.person_outline,
     ];
+    const routes = ['/dashboard', '/products', '/history', '/profile'];
 
     return Container(
       height: 55,
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(
-          top: BorderSide(
-            color: Color(0xFFE6E9F0),
-          ),
-        ),
+        border: Border(top: BorderSide(color: Color(0xFFE6E9F0))),
       ),
       child: Row(
         children: List.generate(4, (index) {
           final active = selectedBottomIndex == index;
-
           return Expanded(
             child: InkWell(
               onTap: () {
-                setState(() {
-                  selectedBottomIndex = index;
-                });
-
-                if (index != 1) {
-                  showMessage(
-                    '${labels[index]} dipilih.',
-                  );
-                }
+                if (index == selectedBottomIndex) return;
+                setState(() => selectedBottomIndex = index);
+                Navigator.pushReplacementNamed(context, routes[index]);
               },
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -904,21 +733,16 @@ static const Color pageBackground = Color(0xFFF5F6FC);
                   Icon(
                     icons[index],
                     size: 19,
-                    color: active
-                        ? primaryBlue
-                        : Colors.black54,
+                    color: active ? primaryBlue : Colors.black54,
                   ),
                   const SizedBox(height: 3),
                   Text(
                     labels[index],
                     style: TextStyle(
                       fontSize: 9,
-                      color: active
-                          ? primaryBlue
-                          : Colors.black54,
-                      fontWeight: active
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                      color: active ? primaryBlue : Colors.black54,
+                      fontWeight:
+                          active ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
                 ],
@@ -930,19 +754,11 @@ static const Color pageBackground = Color(0xFFF5F6FC);
     );
   }
 
-  // ======================================================
-  // DISPOSE
-  // ======================================================
-
   @override
   void dispose() {
     searchController.dispose();
     super.dispose();
   }
-
-  // ======================================================
-  // MAIN BUILD
-  // ======================================================
 
   @override
   Widget build(BuildContext context) {
@@ -954,44 +770,38 @@ static const Color pageBackground = Color(0xFFF5F6FC);
         child: Column(
           children: [
             buildHeader(),
-
             buildSearchBar(),
-
             buildBrandFilter(),
-
             buildCategoryFilter(),
-
+            if (isLoadingProducts)
+              const LinearProgressIndicator(minHeight: 2, color: primaryBlue),
             Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  buildHygieneBanner(),
-
-                  if (visibleProducts.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(35),
-                      child: Center(
-                        child: Text(
-                          'Produk tidak ditemukan',
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontSize: 12,
+              child: RefreshIndicator(
+                onRefresh: _fetchProductsFromBackend,
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    buildHygieneBanner(),
+                    if (visibleProducts.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(35),
+                        child: Center(
+                          child: Text(
+                            'Produk tidak ditemukan',
+                            style: TextStyle(color: Colors.grey, fontSize: 12),
                           ),
                         ),
+                      )
+                    else
+                      ...visibleProducts.map(
+                        (product) => buildProductCard(product),
                       ),
-                    )
-                  else
-                    ...visibleProducts.map(
-                      (product) => buildProductCard(product),
-                    ),
-
-                  const SizedBox(height: 12),
-                ],
+                    const SizedBox(height: 12),
+                  ],
+                ),
               ),
             ),
-
             buildCartBar(),
-
             buildBottomNavigation(),
           ],
         ),
