@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class CheckoutScreen extends StatefulWidget {
   const CheckoutScreen({super.key});
@@ -35,6 +37,50 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  void _handleCreateOrder() {
+    const String orderId = 'GK-882199';
+    const int totalAmount = 68000;
+
+    if (_selectedPaymentMethod == 'qris') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const QrisPaymentScreen(
+            orderId: orderId,
+            totalAmount: 'Rp 68.000',
+          ),
+        ),
+      );
+    } else if (_selectedPaymentMethod == 'bca_va') {
+      _showBcaVaPopupDialog(
+        context,
+        orderId: orderId,
+        vaNumber: '8801081234567890',
+        totalAmount: totalAmount,
+      );
+    } else if (_selectedPaymentMethod == 'gopay') {
+      _showOrderSuccessDialog(
+        context,
+        title: 'Pembayaran GoPay Berhasil!',
+        subtitle:
+            'Saldo GoPay terpotong Rp 68.000. Kurir GalonKu sedang menyiapkan pesananmu.',
+        paymentLabel: 'GoPay',
+        orderId: orderId,
+        totalAmount: totalAmount,
+      );
+    } else {
+      _showOrderSuccessDialog(
+        context,
+        title: 'Pesanan COD Berhasil Dibuat!',
+        subtitle:
+            'Siapkan uang tunai pas Rp 68.000 saat kurir tiba di Kost Sakura.',
+        paymentLabel: 'COD (Tunai)',
+        orderId: orderId,
+        totalAmount: totalAmount,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -45,7 +91,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),
           onPressed: () {
-            _showNotification('Kembali ke Keranjang Belanja');
+            if (Navigator.canPop(context)) {
+              Navigator.pop(context);
+            } else {
+              Navigator.pushReplacementNamed(context, '/products');
+            }
           },
         ),
         centerTitle: true,
@@ -69,7 +119,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Garis motif permen/garis pengiriman di atas
             Container(
               height: 4,
               decoration: const BoxDecoration(
@@ -112,7 +161,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  // 1. KARTU ALAMAT PENGIRIMAN
   Widget _buildAddressCard(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -232,7 +280,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  // 2. KARTU BARANG / PRODUK
   Widget _buildOrderItemsCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -291,25 +338,21 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ],
           ),
           const Divider(height: 24),
-
-          // Aqua Galon
           _buildItemTile(
             title: 'Aqua Galon Isi Ulang 19L',
             subtitle: 'Refill / Tukar Galon Kosong',
             qtyPrice: '2x @ Rp 20.000',
             totalPrice: 'Rp 40.000',
-            imagePath: 'assets/images/Aqua.png',
+            imagePath: 'assets/Aqua.png',
             fallbackIcon: Icons.water_drop,
           ),
           const SizedBox(height: 12),
-
-          // Le Minerale Galon (assets/images/leminerale.png)
           _buildItemTile(
             title: 'Le Minerale 15L',
             subtitle: 'Galon Sekali Pakai (Tanpa Tukar)',
             qtyPrice: '1x @ Rp 22.000',
             totalPrice: 'Rp 22.000',
-            imagePath: 'assets/images/leminerale.png',
+            imagePath: 'assets/leminerale.png',
             fallbackIcon: Icons.water_drop_outlined,
           ),
           const Divider(height: 24),
@@ -417,7 +460,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  // 3. METODE PEMBAYARAN (Disesuaikan Presisi Figma)
   Widget _buildPaymentMethodsSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -455,8 +497,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ],
         ),
         const SizedBox(height: 12),
-        
-        // QRIS
         _buildPaymentOptionTile(
           id: 'qris',
           customIconWidget: _buildIconContainer(
@@ -466,8 +506,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           subtitle: 'GoPay, OVO, Dana, BCA, dll • Scan QR Instan',
         ),
         const SizedBox(height: 10),
-
-        // GoPay
         _buildPaymentOptionTile(
           id: 'gopay',
           customIconWidget: _buildIconContainer(
@@ -475,11 +513,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ),
           title: 'GoPay',
           subtitle: 'Saldo Rp 145.000',
-          badgeText: 'Terpilih',
+          badgeText: 'Instan',
         ),
         const SizedBox(height: 10),
-
-        // BCA Virtual Account (Logo Tulisan BCA seperti di Figma)
         _buildPaymentOptionTile(
           id: 'bca_va',
           customIconWidget: _buildIconContainer(
@@ -496,8 +532,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           subtitle: 'Konfirmasi instan otomatis',
         ),
         const SizedBox(height: 10),
-
-        // Bayar di Tempat / COD (Logo Oranye Tunai seperti di Figma)
         _buildPaymentOptionTile(
           id: 'cod',
           customIconWidget: Container(
@@ -624,7 +658,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  // 4. RINCIAN PEMBAYARAN
   Widget _buildPaymentSummaryCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -728,7 +761,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  // BANNER GARANSI
   Widget _buildGuaranteeBanner() {
     return Container(
       padding: const EdgeInsets.all(12),
@@ -756,7 +788,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  // BOTTOM BAR
   Widget _buildBottomActionBar(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -793,9 +824,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ],
           ),
           ElevatedButton(
-            onPressed: () {
-              _showOrderSuccessDialog(context);
-            },
+            onPressed: _handleCreateOrder,
             style: ElevatedButton.styleFrom(
               backgroundColor: primaryBlue,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
@@ -859,7 +888,108 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  void _showOrderSuccessDialog(BuildContext context) {
+  void _showBcaVaPopupDialog(
+    BuildContext context, {
+    required String orderId,
+    required String vaNumber,
+    required int totalAmount,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.account_balance, color: primaryBlue, size: 22),
+              SizedBox(width: 8),
+              Text(
+                'BCA Virtual Account',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Nomor Virtual Account:',
+                style: TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+              const SizedBox(height: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF2F6FF),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      vaNumber,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: primaryBlue,
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: vaNumber));
+                        _showNotification('Nomor VA disalin!');
+                      },
+                      child: const Icon(Icons.copy, size: 17, color: primaryBlue),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Total Tagihan: Rp 68.000',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryBlue,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _showOrderSuccessDialog(
+                  context,
+                  title: 'Transfer BCA VA Berhasil!',
+                  subtitle: 'Pembayaran Rp 68.000 telah terverifikasi.',
+                  paymentLabel: 'BCA Virtual Account',
+                  orderId: orderId,
+                  totalAmount: totalAmount,
+                );
+              },
+              child: const Text('Saya Sudah Bayar', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  static void _showOrderSuccessDialog(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required String paymentLabel,
+    required String orderId,
+    required int totalAmount,
+  }) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -878,13 +1008,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 child: const Icon(Icons.check_circle, color: Colors.green, size: 48),
               ),
               const SizedBox(height: 16),
-              const Text(
-                'Pesanan Berhasil Dibuat!',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
               ),
               const SizedBox(height: 8),
               Text(
-                'Kurir GalonKu sedang menyiapkan galon pesananmu ke Kost Sakura.',
+                subtitle,
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
               ),
@@ -898,7 +1029,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   ),
                   onPressed: () {
                     Navigator.pop(ctx);
-                    _showNotification('Membuka Lacak Kurir Real-time...');
+                    Navigator.pushReplacementNamed(
+                      context,
+                      '/tracking',
+                      arguments: {
+                        'orderId': orderId,
+                        'productName': '2× Aqua 19L, 1× Le Minerale 15L',
+                        'totalPrice': totalAmount,
+                        'paymentMethod': paymentLabel,
+                        'address': 'Kost Sakura, Kamar 204 (Lantai 2)',
+                      },
+                    );
                   },
                   child: const Text('Lacak Pesanan', style: TextStyle(color: Colors.white)),
                 ),
@@ -907,6 +1048,291 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+class QrisPaymentScreen extends StatefulWidget {
+  final String orderId;
+  final String totalAmount;
+
+  const QrisPaymentScreen({
+    super.key,
+    required this.orderId,
+    required this.totalAmount,
+  });
+
+  @override
+  State<QrisPaymentScreen> createState() => _QrisPaymentScreenState();
+}
+
+class _QrisPaymentScreenState extends State<QrisPaymentScreen> {
+  static const Color primaryBlue = Color(0xFF0061D5);
+  int _remainingSeconds = 14 * 60 + 59;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_remainingSeconds > 0 && mounted) {
+        setState(() => _remainingSeconds--);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String get _formattedTimer {
+    final m = (_remainingSeconds ~/ 60).toString().padLeft(2, '0');
+    final s = (_remainingSeconds % 60).toString().padLeft(2, '0');
+    return '$m : $s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F7FF),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black87),
+          onPressed: () => Navigator.pop(context),
+        ),
+        centerTitle: true,
+        title: const Text(
+          'Pembayaran QRIS',
+          style: TextStyle(
+            color: Colors.black87,
+            fontWeight: FontWeight.bold,
+            fontSize: 17,
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.help_outline, color: Colors.black54),
+            onPressed: () {},
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD92D20),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.access_time, color: Colors.white, size: 16),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Selesaikan pembayaran dalam $_formattedTimer',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Total Pembayaran',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.totalAmount,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: primaryBlue,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      const Text(
+                        'No. Pesanan',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '#${widget.orderId}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFD92D20),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'QRIS',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                      const Text(
+                        'Standar Nasional • GPN',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'GalonKu Kebayoran',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                  const SizedBox(height: 2),
+                  const Text(
+                    'NMID : ID2023948192841',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    width: 200,
+                    height: 200,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade200, width: 2),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Icon(Icons.qr_code_2, size: 185, color: Color(0xFF172337)),
+                        CircleAvatar(
+                          radius: 16,
+                          backgroundColor: primaryBlue,
+                          child: Icon(Icons.water_drop, color: Colors.white, size: 18),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Kode QR berhasil disimpan ke galeri')),
+                        );
+                      },
+                      icon: const Icon(Icons.download, size: 17, color: primaryBlue),
+                      label: const Text(
+                        'Unduh QR Code',
+                        style: TextStyle(color: primaryBlue, fontWeight: FontWeight.bold),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF2F6FF),
+                        side: BorderSide.none,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Buka aplikasi mobile banking atau e-wallet pilihan Anda, lalu scan kode QR di atas.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  _CheckoutScreenState._showOrderSuccessDialog(
+                    context,
+                    title: 'Pembayaran QRIS Berhasil!',
+                    subtitle: 'Pembayaran Rp 68.000 terverifikasi otomatis.',
+                    paymentLabel: 'QRIS',
+                    orderId: widget.orderId,
+                    totalAmount: 68000,
+                  );
+                },
+                icon: const Icon(Icons.check_circle_outline, color: Colors.white),
+                label: const Text(
+                  'Cek Status Pembayaran',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryBlue,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              height: 46,
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(context),
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+                ),
+                child: const Text(
+                  'Ganti Metode Pembayaran >',
+                  style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

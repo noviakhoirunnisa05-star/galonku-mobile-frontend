@@ -24,6 +24,11 @@ class CartItem {
   int get totalPrice => unitPrice * quantity;
 }
 
+enum DeliveryMethodType {
+  dropOff,
+  pickUp,
+}
+
 class CartScreen extends StatefulWidget {
   const CartScreen({super.key});
 
@@ -35,13 +40,17 @@ class _CartScreenState extends State<CartScreen> {
   static const Color primaryBlue = Color(0xFF0061D5);
   static const Color lightBgColor = Color(0xFFF8FAFF);
 
+  DeliveryMethodType _deliveryMethod = DeliveryMethodType.dropOff;
+  String _addressTitle = 'Kost Sakura, Kamar 204';
+  String _addressDetail = 'Jl. Melati No. 12, Kebayoran Baru, Jakarta Selatan';
+
   final List<CartItem> _cartItems = [
     CartItem(
       id: '1',
       title: 'Aqua Galon Isi Ulang 19L',
       subtitle: 'Refill / Tukar Galon Kosong',
       unitPrice: 20000,
-      imagePath: 'assets/images/Aqua.png',
+      imagePath: 'assets/Aqua.png',
       badgeText: '19L',
       quantity: 2,
       isSelected: true,
@@ -51,24 +60,39 @@ class _CartScreenState extends State<CartScreen> {
       title: 'Le Minerale 15L',
       subtitle: 'Galon Sekali Pakai (Tanpa Tukar)',
       unitPrice: 22000,
-      imagePath: 'assets/images/leminerale.png',
+      imagePath: 'assets/leminerale.png',
       badgeText: '15L',
       quantity: 1,
       isSelected: true,
     ),
   ];
 
-  List<CartItem> get _selectedItems => _cartItems.where((e) => e.isSelected).toList();
-  int get _totalPrice => _selectedItems.fold(0, (sum, item) => sum + item.totalPrice);
-  int get _totalGalonCount => _selectedItems.fold(0, (sum, item) => sum + item.quantity);
-  bool get _isAllSelected => _cartItems.isNotEmpty && _cartItems.every((e) => e.isSelected);
+  List<CartItem> get _selectedItems =>
+      _cartItems.where((e) => e.isSelected).toList();
+  int get _totalPrice =>
+      _selectedItems.fold(0, (sum, item) => sum + item.totalPrice);
+  int get _totalGalonCount =>
+      _selectedItems.fold(0, (sum, item) => sum + item.quantity);
+  bool get _isAllSelected =>
+      _cartItems.isNotEmpty && _cartItems.every((e) => e.isSelected);
+
+  String get _deliveryTitle => _deliveryMethod == DeliveryMethodType.dropOff
+      ? 'Drop Off (Diantar Kurir)'
+      : 'Pick Up (Ambil Sendiri)';
+
+  String get _deliverySubtitle => _deliveryMethod == DeliveryMethodType.dropOff
+      ? 'Kurir antar langsung ke depan pintu hunian Anda'
+      : 'Ambil langsung galon di depot resmi GalonKu terdekat';
+
+  int get _deliveryFee => _deliveryMethod == DeliveryMethodType.dropOff ? 5000 : 0;
 
   void _showNotification(String message, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: isError ? Colors.red : primaryBlue,
+        backgroundColor: isError ? Colors.red.shade600 : primaryBlue,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
       ),
@@ -78,7 +102,7 @@ class _CartScreenState extends State<CartScreen> {
   void _toggleSelectAll(bool? value) {
     setState(() {
       final bool checkVal = value ?? false;
-      for (var item in _cartItems) {
+      for (final item in _cartItems) {
         item.isSelected = checkVal;
       }
     });
@@ -100,6 +124,59 @@ class _CartScreenState extends State<CartScreen> {
       _cartItems.removeAt(index);
     });
     _showNotification('Produk berhasil dihapus');
+  }
+
+  Future<void> _openDeliveryMethodAndProceed({bool goToCheckoutAfter = false}) async {
+    if (_selectedItems.isEmpty) {
+      _showNotification('Pilih minimal 1 produk terlebih dahulu', isError: true);
+      return;
+    }
+
+    final result = await Navigator.push<DeliveryMethodType>(
+      context,
+      MaterialPageRoute<DeliveryMethodType>(
+        builder: (_) => DeliveryMethodScreen(
+          initialMethod: _deliveryMethod,
+          addressTitle: _addressTitle,
+          addressDetail: _addressDetail,
+          onChangeAddress: (newTitle, newDetail) {
+            setState(() {
+              _addressTitle = newTitle;
+              _addressDetail = newDetail;
+            });
+          },
+        ),
+      ),
+    );
+
+    if (result != null && mounted) {
+      setState(() {
+        _deliveryMethod = result;
+      });
+      _goToCheckout();
+    } else if (goToCheckoutAfter && mounted) {
+      _goToCheckout();
+    }
+  }
+
+  void _goToCheckout() {
+    if (_selectedItems.isEmpty) {
+      _showNotification('Pilih minimal 1 produk terlebih dahulu', isError: true);
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => CheckoutScreen(
+          items: List<CartItem>.from(_selectedItems),
+          deliveryMethod: _deliveryMethod,
+          deliveryFee: _deliveryFee,
+          addressTitle: _addressTitle,
+          addressDetail: _addressDetail,
+        ),
+      ),
+    );
   }
 
   @override
@@ -150,7 +227,7 @@ class _CartScreenState extends State<CartScreen> {
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: _cartItems.length,
-                        separatorBuilder: (context, index) => const SizedBox(height: 12),
+                        separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) => _buildCartTile(index),
                       ),
                     const SizedBox(height: 16),
@@ -220,9 +297,9 @@ class _CartScreenState extends State<CartScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Kost Sakura, Kamar 204',
-            style: TextStyle(
+          Text(
+            _addressTitle,
+            style: const TextStyle(
               fontWeight: FontWeight.bold,
               fontSize: 14,
               color: Colors.black87,
@@ -230,7 +307,7 @@ class _CartScreenState extends State<CartScreen> {
           ),
           const SizedBox(height: 2),
           Text(
-            'Jl. Melati No. 12, Kebayoran Baru, Jakarta Selatan',
+            _addressDetail,
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
         ],
@@ -335,7 +412,7 @@ class _CartScreenState extends State<CartScreen> {
                   child: Image.asset(
                     item.imagePath,
                     fit: BoxFit.contain,
-                    errorBuilder: (context, error, stackTrace) {
+                    errorBuilder: (_, __, ___) {
                       return const Icon(Icons.water_drop, color: primaryBlue, size: 32);
                     },
                   ),
@@ -402,7 +479,7 @@ class _CartScreenState extends State<CartScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Rp ${_formatPrice(item.totalPrice)}',
+                          'Rp ${_formatRupiah(item.totalPrice)}',
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 14,
@@ -410,7 +487,7 @@ class _CartScreenState extends State<CartScreen> {
                           ),
                         ),
                         Text(
-                          'Rp ${_formatPrice(item.unitPrice)} / galon',
+                          'Rp ${_formatRupiah(item.unitPrice)} / galon',
                           style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
                         ),
                       ],
@@ -518,7 +595,7 @@ class _CartScreenState extends State<CartScreen> {
                 ],
               ),
               InkWell(
-                onTap: () => _showNotification('Ubah Metode Pengiriman'),
+                onTap: () => _openDeliveryMethodAndProceed(goToCheckoutAfter: false),
                 child: const Text(
                   'Ubah>',
                   style: TextStyle(
@@ -531,9 +608,9 @@ class _CartScreenState extends State<CartScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          const Text(
-            'Drop Off (Diantar Kurir)',
-            style: TextStyle(
+          Text(
+            _deliveryTitle,
+            style: const TextStyle(
               fontWeight: FontWeight.bold,
               fontSize: 14,
               color: Colors.black87,
@@ -541,7 +618,7 @@ class _CartScreenState extends State<CartScreen> {
           ),
           const SizedBox(height: 2),
           Text(
-            'Kurir antar langsung ke depan pintu hunian Anda',
+            _deliverySubtitle,
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
         ],
@@ -583,7 +660,7 @@ class _CartScreenState extends State<CartScreen> {
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
               ),
               Text(
-                'Rp ${_formatPrice(_totalPrice)}',
+                'Rp ${_formatRupiah(_totalPrice)}',
                 style: const TextStyle(fontSize: 12, color: Colors.black87),
               ),
             ],
@@ -611,7 +688,7 @@ class _CartScreenState extends State<CartScreen> {
                 ],
               ),
               Text(
-                'Rp ${_formatPrice(_totalPrice)}',
+                'Rp ${_formatRupiah(_totalPrice)}',
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
@@ -669,7 +746,7 @@ class _CartScreenState extends State<CartScreen> {
               ),
               const SizedBox(height: 2),
               Text(
-                'Rp ${_formatPrice(_totalPrice)}',
+                'Rp ${_formatRupiah(_totalPrice)}',
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -683,11 +760,7 @@ class _CartScreenState extends State<CartScreen> {
             ],
           ),
           ElevatedButton(
-            onPressed: _selectedItems.isEmpty
-                ? null
-                : () {
-                    Navigator.pushNamed(context, '/checkout');
-                  },
+            onPressed: _selectedItems.isEmpty ? null : _goToCheckout,
             style: ElevatedButton.styleFrom(
               backgroundColor: primaryBlue,
               disabledBackgroundColor: Colors.grey.shade300,
@@ -734,11 +807,570 @@ class _CartScreenState extends State<CartScreen> {
       ),
     );
   }
+}
 
-  String _formatPrice(int amount) {
-    return amount.toString().replaceAllMapped(
-      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
-      (Match m) => '${m[1]}.',
+class DeliveryMethodScreen extends StatefulWidget {
+  final DeliveryMethodType initialMethod;
+  final String addressTitle;
+  final String addressDetail;
+  final void Function(String title, String detail)? onChangeAddress;
+
+  const DeliveryMethodScreen({
+    super.key,
+    required this.initialMethod,
+    required this.addressTitle,
+    required this.addressDetail,
+    this.onChangeAddress,
+  });
+
+  @override
+  State<DeliveryMethodScreen> createState() => _DeliveryMethodScreenState();
+}
+
+class _DeliveryMethodScreenState extends State<DeliveryMethodScreen> {
+  static const Color primaryBlue = Color(0xFF0061D5);
+  late DeliveryMethodType _selectedMethod;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedMethod = widget.initialMethod;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String selectedLabel = _selectedMethod == DeliveryMethodType.dropOff
+        ? 'Drop Off (Diantar Kurir)'
+        : 'Pick Up (Ambil Sendiri)';
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFF),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black87),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          'Metode Pengiriman',
+          style: TextStyle(
+            color: Colors.black87,
+            fontWeight: FontWeight.bold,
+            fontSize: 17,
+          ),
+        ),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Pilih Metode Pengiriman',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Tentukan cara pengantaran atau pengambilan galon air segar Anda sesuai preferensi.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildOptionTile(
+                      type: DeliveryMethodType.dropOff,
+                      title: 'Drop Off (Diantar Kurir)',
+                      subtitle:
+                          'Kurir GalonKu akan mengantar langsung sampai depan pintu kamar atau rumah Anda.',
+                      badge: 'Paling Praktis',
+                      meta: '15–30 Mnt • Bantu Angkat',
+                    ),
+                    const SizedBox(height: 12),
+                    _buildOptionTile(
+                      type: DeliveryMethodType.pickUp,
+                      title: 'Pick Up (Ambil Sendiri)',
+                      subtitle:
+                          'Ambil langsung galon di depot resmi GalonKu terdekat dari lokasi Anda kapan saja.',
+                      badge: null,
+                      meta: 'Depot Terdekat • Siap 10 Mnt',
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF2F6FF),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ALAMAT PENGANTARAN',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            widget.addressTitle,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          Text(
+                            widget.addressDetail,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(16),
+              color: Colors.white,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Metode Terpilih:',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                      Text(
+                        selectedLabel,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: primaryBlue,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context, _selectedMethod),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primaryBlue,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: const Text(
+                        'Pilih & Lanjutkan →',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
+
+  Widget _buildOptionTile({
+    required DeliveryMethodType type,
+    required String title,
+    required String subtitle,
+    required String? badge,
+    required String meta,
+  }) {
+    final bool isSelected = _selectedMethod == type;
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () => setState(() => _selectedMethod = type),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? primaryBlue : Colors.grey.shade200,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              type == DeliveryMethodType.dropOff
+                  ? Icons.two_wheeler
+                  : Icons.storefront_outlined,
+              color: primaryBlue,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      if (badge != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF5FF),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            badge,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: primaryBlue,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    meta,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: primaryBlue,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
+              color: isSelected ? primaryBlue : Colors.grey.shade400,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class CheckoutScreen extends StatefulWidget {
+  final List<CartItem> items;
+  final DeliveryMethodType deliveryMethod;
+  final int deliveryFee;
+  final String addressTitle;
+  final String addressDetail;
+
+  const CheckoutScreen({
+    super.key,
+    required this.items,
+    required this.deliveryMethod,
+    required this.deliveryFee,
+    required this.addressTitle,
+    required this.addressDetail,
+  });
+
+  @override
+  State<CheckoutScreen> createState() => _CheckoutScreenState();
+}
+
+class _CheckoutScreenState extends State<CheckoutScreen> {
+  static const Color primaryBlue = Color(0xFF0061D5);
+  String _selectedPayment = 'QRIS';
+
+  int get _subtotal =>
+      widget.items.fold(0, (sum, item) => sum + item.totalPrice);
+  int get _grandTotal => _subtotal + widget.deliveryFee;
+
+  @override
+  Widget build(BuildContext context) {
+    final String methodLabel = widget.deliveryMethod == DeliveryMethodType.dropOff
+        ? 'Drop Off (Diantar Kurir)'
+        : 'Pick Up (Ambil Sendiri)';
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFF),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black87),
+          onPressed: () => Navigator.pop(context),
+        ),
+        centerTitle: true,
+        title: const Text(
+          'Checkout',
+          style: TextStyle(
+            color: Colors.black87,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  _card(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.addressTitle,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          widget.addressDetail,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Metode: $methodLabel',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: primaryBlue,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _card(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Daftar Produk',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        ...widget.items.map(
+                          (item) => Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${item.quantity}x ${item.title}',
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                                Text(
+                                  'Rp ${_formatRupiah(item.totalPrice)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _card(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Metode Pembayaran',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...['QRIS', 'GoPay', 'BCA Virtual Account', 'COD Kurir']
+                            .map(
+                          (method) => RadioListTile<String>(
+                            contentPadding: EdgeInsets.zero,
+                            value: method,
+                            groupValue: _selectedPayment,
+                            activeColor: primaryBlue,
+                            title: Text(
+                              method,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            onChanged: (val) {
+                              if (val != null) {
+                                setState(() => _selectedPayment = val);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _card(
+                    child: Column(
+                      children: [
+                        _rowPrice('Subtotal Produk', _subtotal),
+                        const SizedBox(height: 6),
+                        _rowPrice('Biaya Pengiriman', widget.deliveryFee),
+                        const Divider(height: 18),
+                        _rowPrice('Total Pembayaran', _grandTotal, isBold: true),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(16),
+              color: Colors.white,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Total Pembayaran',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                      Text(
+                        'Rp ${_formatRupiah(_grandTotal)}',
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: primaryBlue,
+                        ),
+                      ),
+                    ],
+                  ),
+                  ElevatedButton(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Pesanan dibuat ($methodLabel • $_selectedPayment)',
+                          ),
+                          backgroundColor: primaryBlue,
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primaryBlue,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 22,
+                        vertical: 14,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: const Text(
+                      'Buat Pesanan →',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _card({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _rowPrice(String label, int amount, {bool isBold = false}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: isBold ? 14 : 12,
+            fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+        Text(
+          'Rp ${_formatRupiah(amount)}',
+          style: TextStyle(
+            fontSize: isBold ? 15 : 12,
+            fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
+            color: isBold ? primaryBlue : Colors.black87,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _formatRupiah(int amount) {
+  return amount.toString().replaceAllMapped(
+    RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+    (Match m) => '${m[1]}.',
+  );
 }

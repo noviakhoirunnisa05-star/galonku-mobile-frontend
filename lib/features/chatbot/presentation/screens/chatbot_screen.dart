@@ -1,16 +1,18 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 class ChatMessage {
   final String text;
   final bool isUser;
   final String time;
-  final Widget? customCard;
+  final Map<String, dynamic>? orderDraft;
 
   ChatMessage({
     required this.text,
     required this.isUser,
     required this.time,
-    this.customCard,
+    this.orderDraft,
   });
 }
 
@@ -24,11 +26,14 @@ class ChatbotScreen extends StatefulWidget {
 class _ChatbotScreenState extends State<ChatbotScreen> {
   static const Color primaryBlue = Color(0xFF0061D5);
   static const Color lightBgColor = Color(0xFFF8FAFF);
+  static const String baseUrl = 'http://localhost:5000/api';
 
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   late List<ChatMessage> _messages;
+  bool _isTyping = false;
+  bool _hasProcessedInitialArg = false;
 
   @override
   void initState() {
@@ -36,23 +41,28 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     _messages = [
       ChatMessage(
         text:
-            'Halo Kak! 👋 Ada yang bisa GalonKu Bot bantu hari ini? Mau pesan ulang galon, cek status kurir, atau tanya rekomendasi air mineral berkualitas?',
+            'Halo Kak! 👋 Ada yang bisa GalonKu Bot bantu hari ini? Mau pesan ulang galon, cek estimasi kurir, atau tanya rekomendasi air mineral?',
         isUser: false,
-        time: '09:41 AM',
-      ),
-      ChatMessage(
-        text: 'Mau pesan 2 Aqua galon isi ulang buat ke Kost Sakura kamar 204 dong',
-        isUser: true,
-        time: '09:42 AM',
-      ),
-      ChatMessage(
-        text:
-            'Tentu! Saya sudah meracik ringkasan pesanan instan Kakak sesuai lokasi terdaftar:',
-        isUser: false,
-        time: '09:42 AM',
-        customCard: _buildQuickOrderCard(),
+        time: _currentTimeText(),
       ),
     ];
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_hasProcessedInitialArg) return;
+    _hasProcessedInitialArg = true;
+
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map<String, dynamic>) {
+      final initialMessage = args['initialMessage']?.toString().trim();
+      if (initialMessage != null && initialMessage.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _sendMessage(initialMessage);
+        });
+      }
+    }
   }
 
   @override
@@ -60,6 +70,25 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  String _currentTimeText() {
+    final now = DateTime.now();
+    final hour = now.hour.toString().padLeft(2, '0');
+    final minute = now.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  String _formatRupiah(dynamic value) {
+    final amount = int.tryParse(value.toString()) ?? 0;
+    final str = amount.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < str.length; i++) {
+      buf.write(str[i]);
+      final rem = str.length - i - 1;
+      if (rem > 0 && rem % 3 == 0) buf.write('.');
+    }
+    return 'Rp $buf';
   }
 
   void _showNotification(String msg) {
@@ -74,41 +103,89 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     );
   }
 
-  void _sendMessage([String? textToSend]) {
-    final text = textToSend ?? _messageController.text.trim();
-    if (text.isEmpty) return;
+  Future<void> _sendMessage([String? textToSend]) async {
+    final text = (textToSend ?? _messageController.text).trim();
+    if (text.isEmpty || _isTyping) return;
+
+    final historyPayload = _messages
+        .map((m) => {
+              'role': m.isUser ? 'user' : 'model',
+              'text': m.text,
+            })
+        .toList();
 
     setState(() {
       _messages.add(
         ChatMessage(
           text: text,
           isUser: true,
-          time: '09:43 AM',
+          time: _currentTimeText(),
         ),
       );
+      _isTyping = true;
     });
 
     _messageController.clear();
     _scrollToBottom();
 
-    Future.delayed(const Duration(milliseconds: 1000), () {
-      if (mounted) {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/ai/chat'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'message': text,
+              'history': historyPayload,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        final data = decoded['data'] ?? {};
+        final String replyText =
+            data['reply']?.toString() ?? 'Siap Kak, ada yang bisa dibantu?';
+        final Map<String, dynamic>? orderDraft =
+            data['orderDraft'] is Map<String, dynamic>
+                ? Map<String, dynamic>.from(data['orderDraft'])
+                : null;
+
         setState(() {
+          _isTyping = false;
           _messages.add(
             ChatMessage(
-              text: 'Siap Kak! Ada lagi yang bisa GalonKu Bot bantu untuk pesananmu?',
+              text: replyText,
               isUser: false,
-              time: '09:43 AM',
+              time: _currentTimeText(),
+              orderDraft: orderDraft,
             ),
           );
         });
-        _scrollToBottom();
+      } else {
+        throw Exception('Status ${response.statusCode}');
       }
-    });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isTyping = false;
+        _messages.add(
+          ChatMessage(
+            text:
+                'Maaf Kak, koneksi ke server Gemini AI sedang gangguan. Pastikan backend port 5001 aktif dan GEMINI_API_KEY sudah terisi ya!',
+            isUser: false,
+            time: _currentTimeText(),
+          ),
+        );
+      });
+    }
+
+    _scrollToBottom();
   }
 
   void _scrollToBottom() {
-    Future.delayed(const Duration(milliseconds: 100), () {
+    Future.delayed(const Duration(milliseconds: 120), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
@@ -128,7 +205,13 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            if (Navigator.canPop(context)) {
+              Navigator.pop(context);
+            } else {
+              Navigator.pushReplacementNamed(context, '/dashboard');
+            }
+          },
         ),
         title: Row(
           children: [
@@ -168,11 +251,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
             child: CircleAvatar(
               radius: 16,
               backgroundColor: Colors.grey.shade200,
-              backgroundImage: const AssetImage('assets/images/Profile.png'),
-              child: const Align(
-                alignment: Alignment.bottomRight,
-                child: Icon(Icons.person, size: 20, color: primaryBlue),
-              ),
+              child: const Icon(Icons.person, size: 20, color: primaryBlue),
             ),
           ),
         ],
@@ -207,6 +286,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                     ),
                     const SizedBox(height: 16),
                     ..._messages.map((msg) => _buildMessageBubble(msg)),
+                    if (_isTyping) _buildTypingIndicator(),
                   ],
                 ),
               ),
@@ -215,6 +295,41 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
             _buildChatInput(),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildTypingIndicator() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: const BoxDecoration(
+              color: primaryBlue,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.storefront, color: Colors.white, size: 18),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Text(
+              'GalonKu AI sedang mengetik...',
+              style: TextStyle(
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+                color: Color(0xFF5B6E8C),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -256,7 +371,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: const Text(
-                        '24/7 AI',
+                        'Gemini AI',
                         style: TextStyle(
                           color: Color(0xFF009688),
                           fontSize: 9,
@@ -286,7 +401,18 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.grey, size: 20),
-            onPressed: () => _showNotification('Memuat ulang percakapan AI...'),
+            onPressed: () {
+              setState(() {
+                _messages = [
+                  ChatMessage(
+                    text:
+                        'Halo Kak! 👋 Percakapan baru dimulai. Mau pesan galon apa hari ini?',
+                    isUser: false,
+                    time: _currentTimeText(),
+                  ),
+                ];
+              });
+            },
           ),
         ],
       ),
@@ -345,9 +471,9 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                     ),
                   ),
                 ),
-                if (msg.customCard != null) ...[
+                if (msg.orderDraft != null) ...[
                   const SizedBox(height: 10),
-                  msg.customCard!,
+                  _buildDynamicOrderCard(msg.orderDraft!),
                 ],
                 const SizedBox(height: 4),
                 Row(
@@ -360,8 +486,6 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                     if (msg.isUser) ...[
                       const SizedBox(width: 4),
                       const Icon(Icons.done_all, size: 14, color: primaryBlue),
-                      const SizedBox(width: 2),
-                      Icon(Icons.person, size: 12, color: Colors.grey.shade400),
                     ],
                   ],
                 ),
@@ -373,7 +497,17 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     );
   }
 
-  Widget _buildQuickOrderCard() {
+  Widget _buildDynamicOrderCard(Map<String, dynamic> draft) {
+    final productName = draft['productName']?.toString() ?? 'Aqua Galon Isi Ulang 19L';
+    final int qty = int.tryParse(draft['quantity'].toString()) ?? 1;
+    final int unitPrice = int.tryParse(draft['unitPrice'].toString()) ?? 20000;
+    final int shippingFee = int.tryParse(draft['shippingFee'].toString()) ?? 5000;
+    final int subtotal = qty * unitPrice;
+    final int total = int.tryParse(draft['totalPrice'].toString()) ?? (subtotal + shippingFee);
+    final addressTitle = draft['addressTitle']?.toString() ?? 'Kost Sakura, Kamar 204';
+    final addressDetail = draft['addressDetail']?.toString() ?? 'Jl. Cempaka No. 12, Kel. Menteng';
+    final imageAsset = draft['imageAsset']?.toString() ?? 'assets/images/Aqua.png';
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -424,7 +558,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: Image.asset(
-                      'assets/images/Aqua.png',
+                      imageAsset,
                       fit: BoxFit.contain,
                       errorBuilder: (context, error, stackTrace) =>
                           const Icon(Icons.water_drop, color: primaryBlue),
@@ -436,9 +570,9 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Aqua Galon Isi Ulang 19L',
-                        style: TextStyle(
+                      Text(
+                        productName,
+                        style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                           color: Colors.black87,
@@ -446,13 +580,13 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '2 Galon x Rp 20.000',
+                        '$qty Galon x ${_formatRupiah(unitPrice)}',
                         style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                       ),
                       const SizedBox(height: 2),
-                      const Text(
-                        'Rp 40.000',
-                        style: TextStyle(
+                      Text(
+                        _formatRupiah(subtotal),
+                        style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                           color: primaryBlue,
@@ -490,22 +624,22 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                   ],
                 ),
                 const SizedBox(height: 4),
-                const Padding(
-                  padding: EdgeInsets.only(left: 20),
+                Padding(
+                  padding: const EdgeInsets.only(left: 20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Kost Sakura, Kamar 204',
-                        style: TextStyle(
+                        addressTitle,
+                        style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                           color: Colors.black87,
                         ),
                       ),
                       Text(
-                        'Jl. Cempaka No. 12, Kel. Menteng',
-                        style: TextStyle(fontSize: 10, color: Colors.grey),
+                        addressDetail,
+                        style: const TextStyle(fontSize: 10, color: Colors.grey),
                       ),
                     ],
                   ),
@@ -525,9 +659,9 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                         ),
                       ],
                     ),
-                    const Text(
-                      'Rp 5.000',
-                      style: TextStyle(
+                    Text(
+                      _formatRupiah(shippingFee),
+                      style: const TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
                         color: Colors.black87,
@@ -549,9 +683,9 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Text(
-                    'Rp 45.000',
-                    style: TextStyle(
+                  Text(
+                    _formatRupiah(total),
+                    style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 14,
                       color: primaryBlue,
@@ -723,7 +857,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                       onSubmitted: (val) => _sendMessage(),
                       style: const TextStyle(fontSize: 13),
                       decoration: InputDecoration(
-                        hintText: 'Ketik pesan atau perintah s...',
+                        hintText: 'Ketik pesan atau perintah...',
                         hintStyle: TextStyle(
                           fontSize: 12,
                           color: Colors.grey.shade400,
