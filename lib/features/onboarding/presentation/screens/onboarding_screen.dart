@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import '../../../../core/api/product_service.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -13,8 +13,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   static const Color primaryBlue = Color(0xFF0756C9);
   static const Color darkText = Color(0xFF172337);
   static const Color secondaryText = Color(0xFF596273);
-
-  static const String baseUrl = 'http://localhost:5001/api';
 
   final PageController _pageController = PageController();
   int _currentPage = 0;
@@ -59,23 +57,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Future<void> _checkBackendConnection() async {
     setState(() => _isCheckingServer = true);
-    try {
-      final response = await http
-          .get(Uri.parse('$baseUrl/products'))
-          .timeout(const Duration(seconds: 3));
-
-      if (!mounted) return;
-      setState(() {
-        _isServerOnline = response.statusCode >= 200 && response.statusCode < 500;
-        _isCheckingServer = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _isServerOnline = false;
-        _isCheckingServer = false;
-      });
-    }
+    final isOnline = await ProductService.checkServerStatus();
+    if (!mounted) return;
+    setState(() {
+      _isServerOnline = isOnline;
+      _isCheckingServer = false;
+    });
   }
 
   @override
@@ -167,9 +154,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                 ],
               ),
-
               const Spacer(),
-
               SizedBox(
                 height: 250,
                 child: PageView.builder(
@@ -299,7 +284,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   },
                 ),
               ),
-
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(_slides.length, (index) {
@@ -316,9 +300,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   );
                 }),
               ),
-
               const SizedBox(height: 22),
-
               Text(
                 activeSlide['title'] as String,
                 textAlign: TextAlign.center,
@@ -339,9 +321,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   height: 1.45,
                 ),
               ),
-
               const SizedBox(height: 22),
-
               Row(
                 children: [
                   _buildFeatureBox(Icons.local_shipping_outlined, 'Antar Cepat'),
@@ -351,9 +331,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   _buildFeatureBox(Icons.stairs_outlined, 'Naik Lantai'),
                 ],
               ),
-
               const Spacer(),
-
               SizedBox(
                 width: double.infinity,
                 height: 48,
@@ -385,9 +363,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                 ),
               ),
-
               const SizedBox(height: 12),
-
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [

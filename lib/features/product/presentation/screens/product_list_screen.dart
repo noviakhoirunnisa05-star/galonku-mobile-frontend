@@ -1,6 +1,5 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import '../../../../core/api/product_service.dart';
 import '../widgets/product_card.dart';
 
 class _Product {
@@ -76,7 +75,6 @@ class ProductListScreen extends StatefulWidget {
 class _ProductListScreenState extends State<ProductListScreen> {
   static const Color primaryBlue = Color(0xFF0756C9);
   static const Color pageBackground = Color(0xFFF5F6FC);
-  static const String baseUrl = 'http://localhost:5001/api';
 
   final TextEditingController searchController = TextEditingController();
 
@@ -161,23 +159,14 @@ class _ProductListScreenState extends State<ProductListScreen> {
   Future<void> _fetchProductsFromBackend() async {
     setState(() => isLoadingProducts = true);
     try {
-      final response = await http
-          .get(Uri.parse('$baseUrl/products'))
-          .timeout(const Duration(seconds: 4));
-
+      final listData = await ProductService.getProducts();
       if (!mounted) return;
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        final List<dynamic> listData =
-            decoded is List ? decoded : (decoded['data'] ?? []);
-
-        if (listData.isNotEmpty) {
-          setState(() {
-            products = listData
-                .map((item) => _Product.fromJson(item as Map<String, dynamic>))
-                .toList();
-          });
-        }
+      if (listData.isNotEmpty) {
+        setState(() {
+          products = listData
+              .map((item) => _Product.fromJson(Map<String, dynamic>.from(item)))
+              .toList();
+        });
       }
     } catch (e) {
       debugPrint('Menggunakan katalog lokal: $e');
@@ -208,13 +197,7 @@ class _ProductListScreenState extends State<ProductListScreen> {
 
     setState(() => isSyncingCart = true);
     try {
-      await http
-          .post(
-            Uri.parse('$baseUrl/cart'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(cartPayload),
-          )
-          .timeout(const Duration(seconds: 3));
+      await ProductService.syncCart(cartPayload);
     } catch (e) {
       debugPrint('Sync keranjang ke backend dilewati: $e');
     } finally {
